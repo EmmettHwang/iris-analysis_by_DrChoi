@@ -175,4 +175,4 @@ bash run.sh
 ## 👨‍⚕️ 개발자
 
 **Dr. Choi** | 홍채 분석 연구  
-GitHub: [@EmmettHwang](https://github.com/EmmettHwang)
+
