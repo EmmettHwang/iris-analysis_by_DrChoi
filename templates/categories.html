@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}라벨 카테고리 - 홍채 AI 분석{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0"><i class="bi bi-tags me-2 icon-glow-cyan"></i>라벨 카테고리 관리</h4>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-info btn-sm" onclick="addIridologyPreset()" title="홍채진단 기본 병소 카테고리 추가">
+      <i class="bi bi-eyeglasses me-1"></i>홍채진단 기본 카테고리 추가
+    </button>
+    <button class="btn btn-primary btn-sm" onclick="showAddModal()">
+      <i class="bi bi-plus-lg me-1"></i>새 카테고리
+    </button>
+  </div>
+</div>
+
+<div class="row g-3" id="categoryGrid">
+  {% for cat in categories %}
+  <div class="col-md-6 col-lg-4" id="cat-card-{{ cat.id }}">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="d-flex align-items-center gap-3 mb-2">
+          <div style="
+            background:{{ cat.color }};
+            width:36px; height:36px;
+            border-radius:9px;
+            flex-shrink:0;
+            box-shadow: 0 0 12px {{ cat.color }}66;
+          "></div>
+          <div class="flex-grow-1 overflow-hidden">
+            <div class="fw-semibold text-truncate">{{ cat.name }}</div>
+            {% if cat.description %}
+            <div class="small text-muted text-truncate">{{ cat.description }}</div>
+            {% endif %}
+          </div>
+          <span class="badge bg-secondary flex-shrink-0">{{ cat.label_count }}개</span>
+        </div>
+        {% if cat.label_count > 0 %}
+        <div class="epoch-bar-track">
+          <div class="epoch-bar-fill" style="width:100%;background:{{ cat.color }};"></div>
+        </div>
+        {% endif %}
+      </div>
+      <div class="card-footer d-flex gap-2 py-2">
+        <button class="btn btn-sm btn-outline-light flex-grow-1"
+          onclick="showEditModal({{ cat.id }}, '{{ cat.name|e }}', '{{ cat.color }}', '{{ cat.description|e }}')">
+          <i class="bi bi-pencil me-1"></i>편집
+        </button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteCategory({{ cat.id }})">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12 text-center py-5">
+    <i class="bi bi-tags display-4 text-muted d-block mb-2"></i>
+    <p class="text-muted">카테고리가 없습니다.</p>
+    <button class="btn btn-sm btn-primary" onclick="showAddModal()">첫 카테고리 추가</button>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Add/Edit Modal -->
+<div class="modal fade" id="catModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title" id="catModalTitle">카테고리 추가</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="catId">
+        <div class="mb-3">
+          <label class="form-label">카테고리 이름 <span class="text-danger">*</span></label>
+          <input type="text" id="catName" class="form-control form-control-sm" placeholder="예: 간 이상">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">색상</label>
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <input type="color" id="catColor" value="#3B82F6" class="form-control-color" style="width:40px;height:34px;padding:2px 4px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card3);cursor:pointer">
+            <div class="d-flex gap-1 flex-wrap">
+              {% for color in ['#22C55E','#EF4444','#3B82F6','#F97316','#8B5CF6','#EC4899','#14B8A6','#F59E0B','#6366F1','#0EA5E9','#A16207','#DC2626'] %}
+              <div class="color-preset" style="background:{{ color }}"
+                   onclick="document.getElementById('catColor').value='{{ color }}'"></div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">설명 (선택)</label>
+          <input type="text" id="catDesc" class="form-control form-control-sm" placeholder="이 카테고리에 대한 설명">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-sm btn-outline-light" data-bs-dismiss="modal">취소</button>
+        <button type="button" class="btn btn-sm btn-primary" onclick="saveCategory()">
+          <i class="bi bi-check2 me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const modal = new bootstrap.Modal(document.getElementById('catModal'));
+
+function showAddModal() {
+  document.getElementById('catId').value = '';
+  document.getElementById('catName').value = '';
+  document.getElementById('catColor').value = '#3B82F6';
+  document.getElementById('catDesc').value = '';
+  document.getElementById('catModalTitle').textContent = '카테고리 추가';
+  modal.show();
+}
+
+function showEditModal(id, name, color, desc) {
+  document.getElementById('catId').value = id;
+  document.getElementById('catName').value = name;
+  document.getElementById('catColor').value = color;
+  document.getElementById('catDesc').value = desc;
+  document.getElementById('catModalTitle').textContent = '카테고리 편집';
+  modal.show();
+}
+
+async function saveCategory() {
+  const id = document.getElementById('catId').value;
+  const payload = {
+    name: document.getElementById('catName').value.trim(),
+    color: document.getElementById('catColor').value,
+    description: document.getElementById('catDesc').value.trim(),
+  };
+  if (!payload.name) { toast('이름을 입력해 주세요.', 'error'); return; }
+
+  try {
+    if (id) {
+      await api.put(`/api/categories/${id}`, payload);
+      toast('카테고리가 수정되었습니다.', 'success');
+    } else {
+      await api.post('/api/categories', payload);
+      toast('카테고리가 추가되었습니다.', 'success');
+    }
+    modal.hide();
+    location.reload();
+  } catch (e) {
+    toast(e.message || '저장 실패', 'error');
+  }
+}
+
+async function addIridologyPreset() {
+  try {
+    const data = await api.post('/api/categories/preset/iridology', {});
+    if (data.added > 0) {
+      toast(`홍채진단 카테고리 ${data.added}개가 추가되었습니다.`, 'success');
+      setTimeout(() => location.reload(), 1200);
+    } else {
+      toast('추가할 카테고리가 없습니다 (이미 모두 존재합니다).', 'info');
+    }
+  } catch (e) {
+    toast('추가 실패: ' + e.message, 'error');
+  }
+}
+
+async function deleteCategory(id) {
+  if (!confirm('이 카테고리를 삭제하시겠습니까? 해당 카테고리의 모든 라벨도 삭제됩니다.')) return;
+  try {
+    await api.del(`/api/categories/${id}`);
+    document.getElementById(`cat-card-${id}`)?.remove();
+    toast('카테고리가 삭제되었습니다.', 'success');
+  } catch (e) {
+    toast('삭제 실패: ' + e.message, 'error');
+  }
+}
+</script>
+{% endblock %}

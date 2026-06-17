@@ -1,0 +1,2931 @@
+{% extends "base.html" %}
+{% block title %}라벨링 - {{ image.original_filename }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div class="d-flex align-items-center gap-2">
+    <a href="/gallery" class="btn btn-sm btn-outline-light"><i class="bi bi-arrow-left"></i></a>
+    <div>
+      <span class="fw-semibold">{{ image.original_filename }}</span>
+      {% if image.eye_side and image.eye_side != 'unknown' %}
+      <span class="badge bg-info ms-2">{{ '좌안' if image.eye_side == 'left' else '우안' }}</span>
+      {% endif %}
+      {% if image.subject_id %}<span class="badge bg-secondary ms-1">{{ image.subject_id }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-1">
+    {% if prev_id %}<a href="/label/{{ prev_id }}" class="btn btn-sm btn-outline-light"><i class="bi bi-chevron-left"></i> 이전</a>{% endif %}
+    {% if next_id %}<a href="/label/{{ next_id }}" class="btn btn-sm btn-outline-light">다음 <i class="bi bi-chevron-right"></i></a>{% endif %}
+    <a href="/analyze/{{ image.id }}" class="btn btn-sm btn-outline-success"><i class="bi bi-cpu me-1"></i>AI 분석</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <!-- ── 좌: 이미지 + 캔버스 ────────────────────────────────────────────── -->
+  <div class="col-xl-7 col-lg-7">
+
+    <!-- 툴바 -->
+    <div class="card mb-2">
+      <div class="card-body py-2 px-3">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="tool-section-label">기본</span>
+          <div class="tool-group">
+            <button class="tool-btn active" data-tool="point" title="점 찍기">
+              <i class="bi bi-record-circle-fill"></i> 점
+            </button>
+            <button class="tool-btn" data-tool="polyline" title="선 그리기">
+              <i class="bi bi-bezier"></i> 선
+            </button>
+            <button class="tool-btn" data-tool="polygon" title="영역 그리기">
+              <i class="bi bi-pentagon"></i> 영역
+            </button>
+            <button class="tool-btn" data-tool="bezier" title="베지어 펜 — 클릭=꼭짓점, 드래그=곡선핸들, 더블클릭=완성">
+              <i class="bi bi-pen"></i> 펜
+            </button>
+          </div>
+
+          <span class="tool-section-label">원형</span>
+          <div class="tool-group">
+            <button class="tool-btn" data-tool="circle" title="원 드래그 그리기">
+              <i class="bi bi-circle"></i> 원형
+            </button>
+            <button class="tool-btn tool-btn-special" data-tool="iris_ratio" title="동공+홍채 비율 측정">
+              <i class="bi bi-record2-fill"></i> 홍채 비율
+            </button>
+          </div>
+
+          <button id="autoDetectBtn" class="btn btn-sm auto-detect-btn ms-1"
+                  onclick="runAutoDetect()" title="AI로 동공·홍채 경계 자동 인식">
+            <span id="autoDetectIdle"><i class="bi bi-magic me-1"></i>자동 인식</span>
+            <span id="autoDetectLoading" class="d-none">
+              <span class="spinner-border spinner-border-sm me-1" style="width:.75rem;height:.75rem"></span>인식 중...
+            </span>
+          </button>
+          <button id="irisMeasureToggleBtn" class="btn btn-sm btn-outline-secondary ms-1"
+                  onclick="toggleIrisMeasure()" title="동공·홍채 인식 원 표시/숨기기">
+            <i class="bi bi-record2-fill me-1"></i>원 숨기기
+          </button>
+
+          <!-- 진행 중 컨트롤 -->
+          <div id="drawingControls" class="d-none d-flex align-items-center gap-2 ms-auto">
+            <span class="drawing-indicator" id="drawingIndicatorText">● 그리는 중</span>
+            <button class="btn btn-sm btn-outline-secondary px-2 py-0" onclick="undoLastPoint()" title="마지막 점 취소 (Backspace)">
+              <i class="bi bi-arrow-counterclockwise"></i>
+            </button>
+            <button class="btn btn-sm btn-success px-2 py-0" onclick="finishDrawing()">
+              <i class="bi bi-check2 me-1"></i>완료
+            </button>
+            <button class="btn btn-sm btn-outline-secondary px-2 py-0" onclick="cancelDrawing()">
+              <i class="bi bi-x"></i>
+            </button>
+          </div>
+
+          <!-- 홍채 비율 단계 표시 -->
+          <div id="irisStepDisplay" class="d-none ms-auto">
+            <div class="iris-step-bar">
+              <div class="iris-step-item" id="irisStep1">
+                <div class="iris-step-dot active">1</div>
+                <span>동공 그리기</span>
+              </div>
+              <div class="iris-step-arrow"><i class="bi bi-arrow-right"></i></div>
+              <div class="iris-step-item" id="irisStep2">
+                <div class="iris-step-dot">2</div>
+                <span>홍채 외경</span>
+              </div>
+              <button class="btn btn-sm btn-outline-secondary py-0 px-2 ms-2" onclick="cancelDrawing()">
+                <i class="bi bi-x"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- 힌트 -->
+          <div id="toolHint" class="tool-hint d-none d-xl-block ms-auto">클릭으로 점 추가</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 이미지 + 캔버스 -->
+    <div class="card">
+      <div class="card-body p-0" style="line-height:0;position:relative;border-radius:12px;overflow:hidden">
+        <img id="irisImg"
+             src="/uploads/{{ image.filename }}"
+             alt="iris"
+             draggable="false"
+             style="width:100%;display:block;user-select:none">
+        <canvas id="annotationCanvas"
+                style="position:absolute;top:0;left:0;width:100%;height:100%;touch-action:none"></canvas>
+      </div>
+    </div>
+
+    <!-- 이미지 메타 -->
+    <div class="card mt-2">
+      <div class="card-body py-2 px-3">
+        <div class="row g-1 align-items-center">
+          <div class="col-4">
+            <select id="editEyeSide" class="form-select form-select-sm">
+              <option value="unknown" {% if image.eye_side=='unknown' %}selected{% endif %}>알 수 없음</option>
+              <option value="left"    {% if image.eye_side=='left'    %}selected{% endif %}>좌안</option>
+              <option value="right"   {% if image.eye_side=='right'   %}selected{% endif %}>우안</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <input type="text" id="editSubjectId" class="form-control form-control-sm"
+                   value="{{ image.subject_id or '' }}" placeholder="피험자 ID">
+          </div>
+          <div class="col-3">
+            <input type="text" id="editNotes" class="form-control form-control-sm"
+                   value="{{ image.notes or '' }}" placeholder="메모">
+          </div>
+          <div class="col-1">
+            <button class="btn btn-sm btn-outline-success w-100" onclick="saveImageMeta()" title="저장">
+              <i class="bi bi-check2"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 우: 설정 + 목록 ─────────────────────────────────────────────────── -->
+  <div class="col-xl-5 col-lg-5">
+
+    <!-- 라벨 설정 (접기 가능) -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <i class="bi bi-sliders me-2"></i>
+        <span>라벨 설정</span>
+        <button class="btn btn-xs ms-auto" data-bs-toggle="collapse" data-bs-target="#labelSettingsBody"
+                title="접기/펼치기" style="min-width:28px">
+          <i class="bi bi-chevron-up collapse-chevron"></i>
+        </button>
+      </div>
+      <div class="collapse show" id="labelSettingsBody">
+        <div class="card-body">
+          <div class="mb-2">
+            <label class="form-label">카테고리 <span class="text-danger">*</span></label>
+            <select id="labelCategory" class="form-select form-select-sm" onchange="onCategoryChange()">
+              <option value="">-- 카테고리 선택 --</option>
+              {% for cat in categories %}
+              <option value="{{ cat.id }}" data-color="{{ cat.color }}">{{ cat.name }}</option>
+              {% endfor %}
+            </select>
+            <div id="catPreview" class="d-none mt-1 d-flex align-items-center gap-2">
+              <div id="catDot" style="width:10px;height:10px;border-radius:50%"></div>
+              <span id="catName" style="font-size:0.78rem;color:var(--text-sub)"></span>
+            </div>
+          </div>
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="form-label">심각도</label>
+              <select id="labelSeverity" class="form-select form-select-sm">
+                <option value="0">0 - 정상</option>
+                <option value="1">1 - 경미</option>
+                <option value="2">2 - 중등</option>
+                <option value="3">3 - 심각</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label">신뢰도</label>
+              <select id="labelConfidence" class="form-select form-select-sm">
+                <option value="1.0">높음 (1.0)</option>
+                <option value="0.8">중간 (0.8)</option>
+                <option value="0.6">낮음 (0.6)</option>
+              </select>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">메모 (선택)</label>
+            <input type="text" id="labelNotes" class="form-control form-control-sm" placeholder="관찰 내용">
+          </div>
+          <div class="annotation-guide p-2 rounded mb-3">
+            <div class="small fw-semibold mb-1" style="color:var(--accent)">
+              <i class="bi bi-info-circle me-1"></i>도구 가이드
+            </div>
+            <div style="font-size:0.74rem;color:var(--text-sub);line-height:1.8">
+              <b>⬤ 점</b> — 클릭 즉시 저장<br>
+              <b>╱ 선</b> — 클릭으로 점 추가 → [완료]<br>
+              <b>⬡ 영역</b> — 꼭짓점 클릭 → 시작점 또는 [완료]<br>
+              <b>○ 원형</b> — 드래그로 원 그리기<br>
+              <b>◎ 홍채 비율</b> — ①동공 드래그 → ②홍채 드래그
+            </div>
+          </div>
+          <button class="btn btn-outline-secondary btn-sm w-100" onclick="addLabelNoGeom()">
+            <i class="bi bi-plus me-1"></i>위치 표시 없이 라벨 추가
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 홍채 비율 측정 결과 패널 (접기 가능) -->
+    <div class="card mb-3" id="ratioPanel" style="display:none">
+      <div class="card-header d-flex align-items-center"
+           style="background:linear-gradient(135deg,var(--accent-light),#EFF6FF)">
+        <i class="bi bi-rulers me-2" style="color:var(--accent)"></i>
+        <span>홍채 비율 측정</span>
+        <button class="btn btn-xs ms-auto" data-bs-toggle="collapse" data-bs-target="#ratioPanelBody"
+                title="접기/펼치기" style="min-width:28px">
+          <i class="bi bi-chevron-up collapse-chevron"></i>
+        </button>
+      </div>
+      <div class="collapse show" id="ratioPanelBody">
+        <div class="card-body p-0" id="ratioPanelContent"></div>
+      </div>
+    </div>
+
+    <!-- 홍채 색상 분석 패널 (접기 가능, 분석 후 표시) -->
+    <div class="card mb-3" id="colorPanel" style="display:none">
+      <div class="card-header d-flex align-items-center"
+           style="background:linear-gradient(135deg,#FDF4FF,#F5F3FF)">
+        <i class="bi bi-palette-fill me-2" style="color:#7C3AED"></i>
+        <span class="fw-semibold">홍채 색상 분석</span>
+        <div class="ms-auto d-flex gap-1 align-items-center">
+          <button class="btn btn-xs color-dot-toggle" id="dotToggleBtn"
+                  onclick="toggleColorDots()" title="캔버스에 점 표시/숨기기">
+            <i class="bi bi-grid-3x3"></i> 점 보이기
+          </button>
+          <button class="btn btn-xs color-dot-toggle active-dot-btn" id="colorFillBtn"
+                  onclick="toggleColorFill()" title="점에 홍채 색상 채우기">
+            <i class="bi bi-palette-fill"></i> 색상 끄기
+          </button>
+          <button class="btn btn-xs" id="zoneToggleBtn"
+                  onclick="toggleZones()" title="구역 구분표 표시">
+            <i class="bi bi-pie-chart"></i> 구분표
+          </button>
+          <button class="btn btn-xs" id="contrastToggleBtn"
+                  onclick="toggleContrastMap()" title="주변색과 대비되는 부위 강조">
+            <i class="bi bi-eye"></i> 대비
+          </button>
+          <button class="btn btn-xs" id="brightnessToggleBtn"
+                  onclick="toggleBrightnessMap()" title="대표색 기준 밝기 단계 분포 (+2/+1/기준/-1/-2)">
+            <i class="bi bi-brightness-high"></i> 밝기
+          </button>
+          <button class="btn btn-xs" id="collRingBtn"
+                  onclick="detectCollarette()" title="자율신경환(콜라렛) 위치 자동 감지">
+            <i class="bi bi-record-circle"></i> 신경환
+          </button>
+          <button class="btn btn-xs" id="pupilShapeBtn"
+                  onclick="detectPupilShape()" title="동공 실제 모양 정밀 감지 (불규칙 윤곽)">
+            <i class="bi bi-circle"></i> 동공
+          </button>
+          <button class="btn btn-xs" id="eyelidBtn"
+                  onclick="detectEyelidMask()" title="눈꺼풀 차폐 영역 감지 및 제외">
+            <i class="bi bi-eye-slash"></i> 눈꺼풀
+          </button>
+          <button class="btn btn-xs" onclick="exportColorJSON()" title="JSON 내보내기">
+            <i class="bi bi-download"></i>
+          </button>
+          <button class="btn btn-xs ms-1" data-bs-toggle="collapse" data-bs-target="#colorPanelBody"
+                  title="접기/펼치기" style="min-width:28px">
+            <i class="bi bi-chevron-up collapse-chevron"></i>
+          </button>
+        </div>
+      </div>
+      <!-- 구분표 링 개별 선택 + 자율신경환 가이드 (구분표 ON일 때만 표시) -->
+      <div id="zoneRingBtns" style="display:none;padding:5px 10px;background:#f8f5ff;border-bottom:1px solid #e9e0f8">
+        <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+          <div id="zoneRingBtnGroup" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+          <button id="autoNerveGuideBtn" class="btn btn-xs"
+                  onclick="toggleAutoNerveGuide()"
+                  style="border-left:3px solid #a78bfa;padding:2px 8px;font-size:0.68rem;border-radius:12px"
+                  title="영양·흡수 링 중간선 = 자율신경환 기준 위치">
+            자율신경환
+          </button>
+          <!-- 자율신경환 조절 슬라이더 -->
+          <div id="autoNerveControls" style="display:none;margin-left:6px;display:none;align-items:center;gap:8px;font-size:0.62rem;color:#555">
+            <label style="display:flex;align-items:center;gap:3px;white-space:nowrap">
+              불투명도
+              <input type="range" min="0" max="100" value="90" step="5"
+                     style="width:60px;accent-color:#a78bfa"
+                     oninput="autoNerveOpacity=this.value/100;document.getElementById('autoNerveOpacityVal').textContent=this.value+'%';_drawIrisColorMap()">
+              <span id="autoNerveOpacityVal">90%</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:3px;white-space:nowrap">
+              두께
+              <input type="range" min="1" max="10" value="2" step="0.5"
+                     style="width:50px;accent-color:#a78bfa"
+                     oninput="autoNerveLineWidth=+this.value;document.getElementById('autoNerveWidthVal').textContent=this.value+'px';_drawIrisColorMap()">
+              <span id="autoNerveWidthVal">2px</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:3px;white-space:nowrap">
+              흐림
+              <input type="range" min="0" max="20" value="0" step="1"
+                     style="width:50px;accent-color:#a78bfa"
+                     oninput="autoNerveBlur=+this.value;document.getElementById('autoNerveBlurVal').textContent=this.value+'px';_drawIrisColorMap()">
+              <span id="autoNerveBlurVal">0px</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="collapse show" id="colorPanelBody">
+        <div id="colorPanelContent"></div>
+      </div>
+    </div>
+
+    <!-- 라벨 목록 -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-check me-1"></i>라벨 목록</span>
+        <span id="labelBadge" class="badge bg-secondary">{{ labels|length }}</span>
+      </div>
+      <div id="labelList">
+        {% if not labels %}
+        <p class="text-muted text-center py-4 small" id="emptyMsg">
+          <i class="bi bi-pencil-square d-block mb-2" style="font-size:1.5rem"></i>
+          이미지에 라벨을 추가하세요
+        </p>
+        {% else %}
+        {% for l in labels %}
+        <div class="label-item" id="label-{{ l.id }}">
+          <div class="d-flex align-items-start gap-2">
+            {% set gp = l.geometry_parsed %}
+            <div class="geom-icon" style="color:{{ l.category.color }}">
+              {% if gp %}
+                {% set gtype = gp.get('type','') %}
+                {% if gtype == 'point' %}<i class="bi bi-record-circle-fill"></i>
+                {% elif gtype == 'polyline' %}<i class="bi bi-bezier"></i>
+                {% elif gtype == 'polygon' %}<i class="bi bi-pentagon-fill"></i>
+                {% elif gtype == 'circle' %}<i class="bi bi-circle-fill"></i>
+                {% elif gtype == 'iris_measure' %}<i class="bi bi-record2-fill"></i>
+                {% else %}<i class="bi bi-tag"></i>{% endif %}
+              {% else %}<i class="bi bi-tag"></i>{% endif %}
+            </div>
+            <div class="flex-grow-1">
+              <div class="fw-semibold" style="font-size:0.85rem">{{ l.category.name }}</div>
+              <div class="d-flex gap-2 flex-wrap mt-1">
+                <span class="severity-badge sev-{{ l.severity }}">심각도 {{ l.severity }}</span>
+                {% if gp and gp.get('type') == 'iris_measure' %}
+                <span class="ratio-badge">
+                  비율 {{ "%.1f"|format(gp.get('ratio', 0) * 100) }}%
+                </span>
+                {% endif %}
+                {% if l.notes %}<span class="text-muted" style="font-size:0.72rem">{{ l.notes }}</span>{% endif %}
+              </div>
+            </div>
+            <div class="d-flex gap-1 flex-shrink-0">
+              <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="flashAnnotation({{ l.id }})" title="위치 표시">
+                <i class="bi bi-eye" style="font-size:11px"></i>
+              </button>
+              <button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="deleteLabel({{ l.id }})">
+                <i class="bi bi-trash" style="font-size:11px"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const IMAGE_ID     = {{ image.id }};
+const INITIAL_LABELS = {{ labels_data | safe }};
+
+// ── 상태 ───────────────────────────────────────────────────────────────────────
+const S = {
+  tool:        'point',
+  // 점/선/다각형 드로잉
+  drawing:     false,
+  inProgress:  [],          // [[nx,ny],...]
+  mousePos:    null,        // [px,py]
+  // 원형 드로잉 (mousedown+drag)
+  isDragging:  false,
+  circleCenter: null,       // [nx,ny]
+  // 홍채 비율 툴
+  irisStep:    0,           // 0=대기, 1=동공 완료(홍채 대기)
+  pupilData:   null,        // {center:[nx,ny], radius:rn}
+  // 공통
+  annotations: [],          // 저장된 라벨 렌더링용
+  flashId:     null,
+};
+
+// ── 전역 변수 (syncCanvas 이전에 선언 필수) ────────────────────────────────────
+let colorSamples    = null;
+let irisOverlayData = null;
+let irisRawCache    = null;
+let showColorDots   = false;
+let showColorFill   = true;
+let showIrisZones       = false;
+let selectedZones       = null; // RADIAL_ZONES 정의 후 초기화
+let showAutoNerveGuide  = false; // 자율신경환 가이드 원
+let autoNerveOpacity    = 0.9;   // 불투명도 0~1
+let autoNerveLineWidth  = 1.5;   // 선 두께 px
+let autoNerveBlur       = 0;     // 블러 px
+let selectedSwatches  = new Set(); // 선택된 대표 색상 hex 집합 (다중 선택)
+let showContrastMap   = false;
+let showBrightnessMap = false;
+let dominantColorHex  = null; // 가장 많은 클러스터 색상
+let showCollRing      = false; // 자율신경환 표시
+let collRing          = null;  // { radii: Float32Array(360), N, avgR }
+let showPupilShape    = false; // 동공 정밀 윤곽
+let pupilShape        = null;  // { points: Float32Array(360), N }
+let eyelidMask        = null;  // Uint8Array(360): 1=눈꺼풀 차폐 각도 (색상 필터링용)
+let eyelidPolygons    = null;  // [{coords:[[nx,ny],...], is_upper:bool}] 라벨 원본 좌표
+let showEyelidMask    = false;
+
+// 눈꺼풀/피부 색상 감지
+// 핵심: 밝음(lum>175) + HSV채도 0.06~0.42 → 빛반사(sat≈0)와 구분
+// 적용 예: #fddac8 #f3cab4 #f3b897 #fbe3c3 #efccab #e1b795 #d1bfb8 #f2dbf8
+function isEyelidColor(r, g, b) {
+  const mx  = Math.max(r, g, b);
+  const mn  = Math.min(r, g, b);
+  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+  const sat = mx > 0 ? (mx - mn) / mx : 0;  // HSV 채도 (빛반사는 sat≈0)
+  return lum > 175 && sat > 0.06 && sat < 0.42;
+}
+let showIrisMeasure   = true;  // 동공/홍채 자동인식 원 표시 여부
+
+// 동공 → 홍채 외경 방향 동심원 구역 (radial: 0=동공경계, 1=홍채외경)
+const RADIAL_ZONES = [
+  { label:'소화기계',   from:0.00, to:0.22, color:'#FFFFFF' },
+  { label:'영양·흡수', from:0.22, to:0.44, color:'#FFB3C6' },
+  { label:'순환기계',  from:0.44, to:0.64, color:'#95D5B2' },
+  { label:'장기·신경', from:0.64, to:0.82, color:'#FFE169' },
+  { label:'림프·피부', from:0.82, to:1.00, color:'#ADB5BD' },
+];
+selectedZones = new Set(RADIAL_ZONES.map((_, i) => i)); // 기본: 전체 선택
+let activeAdj     = null;  // { hit, ann } while dragging an existing circle
+let suppressNextClick = false;
+
+// ── 캔버스 ────────────────────────────────────────────────────────────────────
+const imgEl  = document.getElementById('irisImg');
+const canvas = document.getElementById('annotationCanvas');
+const ctx    = canvas.getContext('2d');
+
+function syncCanvas() {
+  const r = imgEl.getBoundingClientRect();
+  canvas.width  = r.width;
+  canvas.height = r.height;
+  irisOverlayData = null; // 캔버스 크기 바뀌면 재계산
+  render();
+}
+imgEl.addEventListener('load', syncCanvas);
+if (imgEl.complete) syncCanvas();
+let _rsz;
+window.addEventListener('resize', () => { clearTimeout(_rsz); _rsz = setTimeout(syncCanvas, 150); });
+
+// ── 좌표 ─────────────────────────────────────────────────────────────────────
+function toNorm(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+}
+function toPx(nx, ny) { return [nx * canvas.width, ny * canvas.height]; }
+function canvasPx(e)  {
+  const r = canvas.getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+
+// ── 카테고리 색상 ──────────────────────────────────────────────────────────────
+function getCurrentColor() {
+  const sel = document.getElementById('labelCategory');
+  return sel.options[sel.selectedIndex]?.dataset?.color || '#2563EB';
+}
+function onCategoryChange() {
+  const sel = document.getElementById('labelCategory');
+  const opt = sel.options[sel.selectedIndex];
+  const preview = document.getElementById('catPreview');
+  if (opt?.value) {
+    document.getElementById('catDot').style.background = opt.dataset.color || '#ccc';
+    document.getElementById('catName').textContent = opt.text.trim();
+    preview.classList.remove('d-none'); preview.classList.add('d-flex');
+  } else {
+    preview.classList.add('d-none');
+  }
+  render();
+}
+
+// ── 툴 버튼 ───────────────────────────────────────────────────────────────────
+const HINTS = {
+  point:      '클릭으로 점을 즉시 저장합니다',
+  polyline:   '클릭으로 점 추가 → [완료] 버튼으로 선 저장',
+  polygon:    '꼭짓점 클릭 → 시작점 클릭 또는 [완료]로 닫기',
+  circle:     '드래그로 원을 그립니다',
+  iris_ratio: '① 동공 드래그 → ② 홍채 외경 드래그',
+  bezier:     '클릭으로 점 추가 → 자동 부드러운 곡선 · 완료=열린선 · Enter=닫힌도형 · Esc=취소',
+};
+
+// ── 베지어 펜툴 상태 (Catmull-Rom 방식 — 클릭만으로 자동 부드러운 곡선) ─────
+const BZ = {
+  anchors:  [],    // [{x,y}] 클릭한 점 목록
+  mousePos: null,  // 마우스 현재 위치 (미리보기용)
+  active:   false,
+};
+document.querySelectorAll('.tool-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (S.drawing || S.irisStep > 0) cancelDrawing();
+    S.tool = btn.dataset.tool;
+    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    canvas.style.cursor = 'crosshair';
+    document.getElementById('toolHint').textContent = HINTS[S.tool] || '';
+    if (S.tool === 'iris_ratio') showIrisStepUI(0);
+    else hideIrisStepUI();
+  });
+});
+
+function switchTool(toolName, adjustMode = false) {
+  if (S.drawing || S.irisStep > 0) cancelDrawing();
+  S.tool = toolName;
+  document.querySelectorAll('.tool-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.tool === toolName);
+  });
+  canvas.style.cursor = 'crosshair';
+  if (toolName === 'iris_ratio' && adjustMode) {
+    hideIrisStepUI();
+    document.getElementById('toolHint').textContent = '원 테두리 드래그 → 크기 조정 / 원 내부 드래그 → 이동';
+  } else {
+    document.getElementById('toolHint').textContent = HINTS[toolName] || '';
+    if (toolName === 'iris_ratio') showIrisStepUI(0);
+    else hideIrisStepUI();
+  }
+}
+
+function showIrisStepUI(step) {
+  document.getElementById('drawingControls').classList.add('d-none');
+  document.getElementById('irisStepDisplay').classList.remove('d-none');
+  document.getElementById('irisStep1').querySelector('.iris-step-dot').classList.toggle('active', step === 0);
+  document.getElementById('irisStep2').querySelector('.iris-step-dot').classList.toggle('active', step === 1);
+}
+function hideIrisStepUI() {
+  document.getElementById('irisStepDisplay').classList.add('d-none');
+}
+
+// ── 조정 히트 테스트 (iris_measure 원에 마우스가 있는지) ────────────────────────
+const ADJ_TOL = 14; // 가장자리 감지 허용 픽셀
+
+function hitTestIrisMeasure(ann, [mx, my]) {
+  const g = ann.geometry;
+  if (g?.type !== 'iris_measure') return null;
+
+  const [pcx, pcy] = toPx(...g.pupil.center);
+  const pr         = g.pupil.radius * canvas.width;
+  const [icx, icy] = toPx(...g.iris.center);
+  const ir         = g.iris.radius * canvas.width;
+
+  const dPupilEdge = Math.abs(Math.hypot(mx-pcx, my-pcy) - pr);
+  if (dPupilEdge < ADJ_TOL) return { hit: 'pupil_edge', ann };
+
+  const dIrisEdge  = Math.abs(Math.hypot(mx-icx, my-icy) - ir);
+  if (dIrisEdge < ADJ_TOL) return { hit: 'iris_edge',  ann };
+
+  if (Math.hypot(mx-pcx, my-pcy) < pr)        return { hit: 'pupil_center', ann };
+  if (Math.hypot(mx-icx, my-icy) < ir)        return { hit: 'iris_center',  ann };
+  return null;
+}
+
+// ── MOUSE DOWN ────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+
+  // ── 베지어 펜툴은 click 이벤트로 처리 ───────────────────────────────────
+  if (S.tool === 'bezier') return;
+
+  // ① 기존 iris_measure 조정 — iris_ratio 툴일 때만 작동
+  const mp = canvasPx(e);
+  if (S.tool === 'iris_ratio') {
+    for (const ann of S.annotations) {
+      const h = hitTestIrisMeasure(ann, mp);
+      if (h) {
+        activeAdj         = h;
+        suppressNextClick = true;
+        return;
+      }
+    }
+  }
+
+  // ② 원형 / 홍채비율 새로 그리기
+  if (S.tool !== 'circle' && S.tool !== 'iris_ratio') return;
+  S.circleCenter = toNorm(e);
+  S.isDragging   = true;
+});
+
+// ── MOUSE MOVE ────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousemove', e => {
+  const mp = canvasPx(e);
+  S.mousePos = mp;
+
+  if (S.tool === 'bezier') {
+    BZ.mousePos = {x: mp[0], y: mp[1]};
+    render(); return;
+  }
+
+  // 조정 드래그 중
+  if (activeAdj) {
+    const g  = activeAdj.ann.geometry;
+    const nx = mp[0] / canvas.width;
+    const ny = mp[1] / canvas.height;
+
+    if (activeAdj.hit === 'pupil_center') {
+      g.pupil.center = [nx, ny];
+    } else if (activeAdj.hit === 'iris_center') {
+      g.iris.center = [nx, ny];
+    } else if (activeAdj.hit === 'pupil_edge') {
+      const [pcx, pcy] = toPx(...g.pupil.center);
+      g.pupil.radius = Math.hypot(mp[0]-pcx, mp[1]-pcy) / canvas.width;
+    } else if (activeAdj.hit === 'iris_edge') {
+      const [icx, icy] = toPx(...g.iris.center);
+      g.iris.radius = Math.hypot(mp[0]-icx, mp[1]-icy) / canvas.width;
+    }
+    g.ratio = g.iris.radius > 0 ? g.pupil.radius / g.iris.radius : 0;
+    updateRatioPanel();
+    render();
+    return;
+  }
+
+  // 커서 — 조정 가능 위치 hover
+  let cur = (S.tool === 'circle' || S.tool === 'iris_ratio') ? 'crosshair' : 'default';
+  for (const ann of S.annotations) {
+    const h = hitTestIrisMeasure(ann, mp);
+    if (h) {
+      cur = h.hit.includes('edge') ? 'ew-resize' : 'move';
+      break;
+    }
+  }
+  canvas.style.cursor = cur || 'crosshair';
+  render();
+});
+canvas.addEventListener('mouseleave', () => { S.mousePos = null; render(); });
+
+// ── MOUSE UP ──────────────────────────────────────────────────────────────────
+canvas.addEventListener('mouseup', async e => {
+  // 베지어는 click으로 처리
+
+  // 조정 완료 → DB 저장
+  if (activeAdj) {
+    const ann = activeAdj.ann;
+    activeAdj = null;
+    try {
+      await api.put(`/api/labels/${ann.id}`, { geometry: ann.geometry });
+      // ratio badge 업데이트
+      const badge = document.querySelector(`#label-${ann.id} .ratio-badge`);
+      if (badge) badge.textContent = `비율 ${(ann.geometry.ratio * 100).toFixed(1)}%`;
+      toast('조정 저장됨', 'success');
+    } catch (err) { toast('저장 실패: ' + err.message, 'error'); }
+    render();
+    return;
+  }
+
+  if (!S.isDragging || !S.circleCenter) return;
+  S.isDragging = false;
+
+  const [cx, cy] = toPx(...S.circleCenter);
+  const [mx, my] = canvasPx(e);
+  const radiusPx   = Math.hypot(mx - cx, my - cy);
+  const radiusNorm = radiusPx / canvas.width;
+
+  if (radiusNorm < 0.01) { S.circleCenter = null; render(); return; }
+
+  if (S.tool === 'circle') {
+    const catId = document.getElementById('labelCategory').value;
+    if (!catId) { toast('카테고리를 선택해 주세요.', 'error'); S.circleCenter = null; render(); return; }
+    saveLabel({ type: 'circle', center: S.circleCenter, radius: radiusNorm });
+    S.circleCenter = null;
+
+  } else if (S.tool === 'iris_ratio') {
+    if (S.irisStep === 0) {
+      S.pupilData = { center: S.circleCenter, radius: radiusNorm };
+      S.irisStep  = 1;
+      S.circleCenter = null;
+      showIrisStepUI(1);
+      toast('동공 완료! 이제 홍채 외경을 드래그해 주세요.', 'info', 3500);
+    } else {
+      const irisData = { center: S.circleCenter, radius: radiusNorm };
+      const ratio = S.pupilData.radius / radiusNorm;
+      const geom  = { type: 'iris_measure', pupil: S.pupilData, iris: irisData, ratio };
+      S.irisStep = 0; S.pupilData = null; S.circleCenter = null;
+      showIrisStepUI(0);
+      await upsertIrisMeasure(geom, '홍채 비율 측정 완료! 드래그로 미세 조정 가능합니다.');
+    }
+  }
+  render();
+});
+
+// ── DBLCLICK — 베지어 완성 ────────────────────────────────────────────────────
+canvas.addEventListener('dblclick', e => {
+  if (S.tool === 'bezier' && BZ.active) {
+    // 더블클릭: click 2회 발생으로 점 2개 추가됨 → 마지막 1개 제거 후 완성
+    if (BZ.anchors.length > 2) BZ.anchors.pop();
+    finishBezier(false);
+  }
+});
+
+// ── CLICK (점/선/다각형 전용) ──────────────────────────────────────────────────
+canvas.addEventListener('click', e => {
+  if (suppressNextClick) { suppressNextClick = false; return; }
+  if (S.isDragging) return;
+  if (S.tool === 'circle' || S.tool === 'iris_ratio') return;
+
+  const catId = document.getElementById('labelCategory').value;
+  if (!catId) { toast('먼저 카테고리를 선택해 주세요.', 'error'); return; }
+
+  // ── 베지어 펜툴: 클릭으로 점 추가 ────────────────────────────────────────
+  if (S.tool === 'bezier') {
+    const [mx, my] = canvasPx(e);
+    // 시작점 근처 클릭 (3점 이상) → 닫힌 도형 완성
+    if (BZ.anchors.length >= 3) {
+      const f = BZ.anchors[0];
+      if (Math.hypot(mx - f.x, my - f.y) < 16) { finishBezier(true); return; }
+    }
+    BZ.anchors.push({x: mx, y: my});
+    if (!BZ.active) { BZ.active = true; setDrawingMode(true); }
+    render();
+    return;
+  }
+
+  const [nx, ny] = toNorm(e);
+
+  if (S.tool === 'point') {
+    saveLabel({ type: 'point', coords: [[nx, ny]] });
+    return;
+  }
+
+  // polyline / polygon
+  if (!S.drawing) {
+    S.drawing = true;
+    S.inProgress = [[nx, ny]];
+    setDrawingMode(true);
+  } else {
+    // polygon: 시작점 근처 → 닫기
+    if (S.tool === 'polygon' && S.inProgress.length >= 3) {
+      const [fpx, fpy] = toPx(...S.inProgress[0]);
+      const [cpx, cpy] = toPx(nx, ny);
+      if (Math.hypot(cpx - fpx, cpy - fpy) < 16) { finishDrawing(); return; }
+    }
+    S.inProgress.push([nx, ny]);
+  }
+  render();
+});
+
+// ── 완료 / 취소 ───────────────────────────────────────────────────────────────
+function finishDrawing() {
+  if (S.tool === 'bezier') {
+    if (BZ.anchors.length >= 2) finishBezier(false);
+    else { toast('점을 2개 이상 추가해야 합니다.', 'error'); cancelDrawing(); }
+    return;
+  }
+  if (S.tool === 'iris_ratio') { cancelDrawing(); return; }
+  if (!S.drawing) return;
+  if (S.inProgress.length < 2) {
+    toast('점을 2개 이상 추가해야 합니다.', 'error');
+    cancelDrawing(); return;
+  }
+  saveLabel({ type: S.tool, coords: [...S.inProgress] });
+  cancelDrawing();
+}
+
+function undoLastPoint() {
+  if (S.tool === 'bezier' && BZ.active) {
+    if (BZ.anchors.length > 1) {
+      BZ.anchors.pop();
+    } else {
+      cancelDrawing(); return;
+    }
+  } else if (S.drawing) {
+    if (S.inProgress.length > 1) {
+      S.inProgress.pop();
+    } else {
+      cancelDrawing(); return;
+    }
+  }
+  render();
+}
+
+// Catmull-Rom 세그먼트 i의 베지어 제어점을 반환
+function _catmullRomCPs(anchors, i, closed) {
+  const n    = anchors.length;
+  const a    = anchors[i];
+  const b    = anchors[(i + 1) % n];
+  const prev = closed ? anchors[(i - 1 + n) % n] : (i > 0 ? anchors[i - 1] : a);
+  const next = closed ? anchors[(i + 2) % n]     : (i + 2 < n ? anchors[i + 2] : b);
+  return {
+    cp1x: a.x + (b.x - prev.x) / 6,
+    cp1y: a.y + (b.y - prev.y) / 6,
+    cp2x: b.x - (next.x - a.x) / 6,
+    cp2y: b.y - (next.y - a.y) / 6,
+  };
+}
+
+// canvas ctx에 Catmull-Rom 경로를 그린다 (stroke는 호출자가)
+function _drawCatmullRom(ctx, anchors, closed) {
+  const n = anchors.length;
+  if (n < 2) return;
+  const segs = closed ? n : n - 1;
+  ctx.beginPath();
+  ctx.moveTo(anchors[0].x, anchors[0].y);
+  for (let i = 0; i < segs; i++) {
+    const { cp1x, cp1y, cp2x, cp2y } = _catmullRomCPs(anchors, i, closed);
+    const b = anchors[(i + 1) % n];
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, b.x, b.y);
+  }
+  if (closed) ctx.closePath();
+  ctx.stroke();
+}
+
+// Catmull-Rom 곡선 → 정규화 좌표 배열로 샘플링 (세그먼트당 24점)
+function _sampleBezier(anchors, closed) {
+  const cw = canvas.width, ch = canvas.height;
+  const pts = [];
+  const n   = anchors.length;
+  const segs = closed ? n : n - 1;
+  const SPG  = 24;
+  for (let i = 0; i < segs; i++) {
+    const a = anchors[i];
+    const b = anchors[(i + 1) % n];
+    const { cp1x, cp1y, cp2x, cp2y } = _catmullRomCPs(anchors, i, closed);
+    for (let t = 0; t <= SPG; t++) {
+      if (i > 0 && t === 0) continue;
+      const u = t / SPG, mu = 1 - u;
+      const px = mu*mu*mu*a.x + 3*mu*mu*u*cp1x + 3*mu*u*u*cp2x + u*u*u*b.x;
+      const py = mu*mu*mu*a.y + 3*mu*mu*u*cp1y + 3*mu*u*u*cp2y + u*u*u*b.y;
+      pts.push([+(px/cw).toFixed(5), +(py/ch).toFixed(5)]);
+    }
+  }
+  return pts;
+}
+
+async function finishBezier(closed) {
+  if (BZ.anchors.length < 2) { cancelDrawing(); return; }
+  const catId = document.getElementById('labelCategory').value;
+  if (!catId) { toast('카테고리를 선택해 주세요.', 'error'); return; }
+  const coords = _sampleBezier(BZ.anchors, closed);
+  const type   = closed ? 'polygon' : 'polyline';
+  cancelDrawing();
+  await saveLabel({ type, coords });
+}
+
+function cancelDrawing() {
+  S.drawing      = false;
+  S.inProgress   = [];
+  S.isDragging   = false;
+  S.circleCenter = null;
+  S.irisStep     = 0;
+  S.pupilData    = null;
+  BZ.anchors     = [];
+  BZ.dragging    = false;
+  BZ.dragStart   = null;
+  BZ.active      = false;
+  setDrawingMode(false);
+  if (S.tool === 'iris_ratio') showIrisStepUI(0);
+  else hideIrisStepUI();
+  render();
+}
+
+function setDrawingMode(on) {
+  const circles = S.tool === 'circle' || S.tool === 'iris_ratio';
+  if (!circles) document.getElementById('drawingControls').classList.toggle('d-none', !on);
+}
+
+// ── 저장 ─────────────────────────────────────────────────────────────────────
+async function saveLabel(geometry) {
+  const catId = document.getElementById('labelCategory').value;
+  if (!catId) { toast('카테고리를 선택해 주세요.', 'error'); return; }
+  try {
+    const label = await api.post('/api/labels', {
+      image_id:    IMAGE_ID,
+      category_id: parseInt(catId),
+      severity:    parseInt(document.getElementById('labelSeverity').value),
+      confidence:  parseFloat(document.getElementById('labelConfidence').value),
+      notes:       document.getElementById('labelNotes').value,
+      geometry,
+    });
+    S.annotations.push({
+      id:             label.id,
+      geometry:       label.geometry,
+      category_color: label.category_color,
+      category_name:  label.category_name,
+      severity:       label.severity,
+      notes:          label.notes,
+    });
+    appendLabelToList(label);
+    updateBadge();
+    updateRatioPanel();
+    render();
+    toast('라벨 저장됨', 'success');
+  } catch (e) {
+    toast('저장 실패: ' + e.message, 'error');
+  }
+}
+
+// iris_measure는 이미지당 1개만 유지 — 기존 있으면 업데이트, 없으면 새로 생성
+async function upsertIrisMeasure(geom, toastMsg) {
+  // iris_measure는 카테고리 불필요 (category_id = null 허용)
+  const existing = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+  if (existing) {
+    existing.geometry = geom;
+    try {
+      await api.put(`/api/labels/${existing.id}`, { geometry: geom });
+      const badge = document.querySelector(`#label-${existing.id} .ratio-badge`);
+      if (badge) badge.textContent = `비율 ${(geom.ratio * 100).toFixed(1)}%`;
+    } catch (e) { toast('저장 실패: ' + e.message, 'error'); return; }
+  } else {
+    // 처음 생성 — 카테고리 없이 저장
+    try {
+      const label = await api.post('/api/labels', {
+        image_id: IMAGE_ID,
+        geometry: geom,
+      });
+      S.annotations.push({
+        id:             label.id,
+        geometry:       label.geometry,
+        category_color: label.category_color,
+        category_name:  label.category_name,
+        severity:       label.severity,
+        notes:          label.notes,
+      });
+      appendLabelToList(label);
+      updateBadge();
+    } catch (e) { toast('저장 실패: ' + e.message, 'error'); return; }
+  }
+
+  updateRatioPanel();
+  render();
+  if (toastMsg) toast(toastMsg, 'success', 4000);
+}
+
+async function addLabelNoGeom() { await saveLabel(null); }
+
+// ── 삭제 ─────────────────────────────────────────────────────────────────────
+async function deleteLabel(id) {
+  if (!confirm('이 라벨을 삭제하시겠습니까?')) return;
+  try {
+    await api.del(`/api/labels/${id}`);
+    document.getElementById(`label-${id}`)?.remove();
+    S.annotations = S.annotations.filter(a => a.id !== id);
+    updateBadge();
+    updateRatioPanel();
+    render();
+    if (!document.querySelector('.label-item')) {
+      document.getElementById('labelList').innerHTML =
+        '<p class="text-muted text-center py-4 small" id="emptyMsg">' +
+        '<i class="bi bi-pencil-square d-block mb-2" style="font-size:1.5rem"></i>이미지에 라벨을 추가하세요</p>';
+    }
+    toast('라벨 삭제됨', 'info');
+  } catch (e) {
+    toast('삭제 실패: ' + e.message, 'error');
+  }
+}
+
+function flashAnnotation(id) {
+  S.flashId = id;
+  render();
+  setTimeout(() => { S.flashId = null; render(); }, 1400);
+}
+
+// ── AI 자동 인식 ──────────────────────────────────────────────────────────────
+async function runAutoDetect() {
+  const btn = document.getElementById('autoDetectBtn');
+  document.getElementById('autoDetectIdle').classList.add('d-none');
+  document.getElementById('autoDetectLoading').classList.remove('d-none');
+  btn.disabled = true;
+
+  try {
+    // ① 서버 측 원 감지
+    const data = await api.post(`/api/images/${IMAGE_ID}/detect_iris`, {});
+    if (!data.success) throw new Error(data.error || '서버 인식 실패');
+
+    const c = data.circles;
+    const geom = {
+      type:  'iris_measure',
+      pupil: c.pupil,
+      iris:  c.iris,
+      ratio: c.ratio ?? (c.pupil.radius / c.iris.radius),
+    };
+
+    // ② 기존 iris_measure 있으면 업데이트 (카테고리 불필요)
+    const existing = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+    if (existing) {
+      existing.geometry = geom;
+      await api.put(`/api/labels/${existing.id}`, { geometry: geom });
+      const badge = document.querySelector(`#label-${existing.id} .ratio-badge`);
+      if (badge) badge.textContent = `비율 ${(geom.ratio * 100).toFixed(1)}%`;
+      updateRatioPanel();
+      render();
+      switchTool('iris_ratio', true);  // 조정 모드 — 바로 드래그 가능
+      toast(`자동 인식 완료 (${c.method}) — 원 테두리/내부를 드래그해 미세 조정하세요.`, 'success', 5000);
+      return;
+    }
+
+    // ③ 신규 생성 — 카테고리 불필요 (iris_measure는 시스템 측정값)
+    await upsertIrisMeasure(geom, `자동 인식 완료 (${c.method}) — 원 테두리/내부를 드래그해 미세 조정하세요.`);
+    switchTool('iris_ratio', true);  // 신규 생성 후에도 조정 모드로
+  } catch (err) {
+    console.error('[AutoDetect]', err);
+    toast('자동 인식 실패: ' + (err.message || String(err)), 'error', 5000);
+  } finally {
+    document.getElementById('autoDetectIdle').classList.remove('d-none');
+    document.getElementById('autoDetectLoading').classList.add('d-none');
+    btn.disabled = false;
+  }
+}
+
+// ── 비율 패널 업데이트 ─────────────────────────────────────────────────────────
+function updateRatioPanel() {
+  const measures = S.annotations.filter(a => a.geometry?.type === 'iris_measure');
+  const panel    = document.getElementById('ratioPanel');
+  const content  = document.getElementById('ratioPanelContent');
+  if (!measures.length) { panel.style.display = 'none'; return; }
+
+  panel.style.display = '';
+  content.innerHTML = measures.map(m => {
+    const g   = m.geometry;
+    const pct = (g.ratio * 100).toFixed(1);
+    const pupD = (g.pupil.radius * 2 * 100).toFixed(1);
+    const irsD = (g.iris.radius * 2 * 100).toFixed(1);
+    let status, statusCls, statusIcon;
+    if      (g.ratio < 0.20) { status = '동공 축소 (축동)'; statusCls = 'text-info';    statusIcon = '⬇'; }
+    else if (g.ratio > 0.35) { status = '동공 확대 (산동)'; statusCls = 'text-danger';  statusIcon = '⬆'; }
+    else                     { status = '정상 범위';         statusCls = 'text-success'; statusIcon = '✓'; }
+
+    return `
+      <div class="ratio-result-item">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <div class="ratio-circle-preview">
+            <svg width="56" height="56" viewBox="0 0 56 56">
+              <circle cx="28" cy="28" r="${Math.max(4, Math.min(26, g.iris.radius * 90))}"
+                      fill="rgba(37,99,235,0.1)" stroke="#2563EB" stroke-width="1.5"/>
+              <circle cx="28" cy="28" r="${Math.max(2, Math.min(24, g.pupil.radius * 90))}"
+                      fill="rgba(30,58,138,0.25)" stroke="#1E3A8A" stroke-width="1.5"/>
+            </svg>
+          </div>
+          <div class="flex-grow-1">
+            <div class="fw-bold" style="font-size:1.3rem;letter-spacing:-1px;color:var(--accent)">${pct}%</div>
+            <div class="${statusCls}" style="font-size:0.75rem;font-weight:600">${statusIcon} ${status}</div>
+          </div>
+        </div>
+        <div class="ratio-detail-grid">
+          <div class="ratio-detail-cell">
+            <div class="ratio-detail-label"><span class="pupil-dot"></span>동공 직경</div>
+            <div class="ratio-detail-value">${pupD}%</div>
+          </div>
+          <div class="ratio-detail-cell">
+            <div class="ratio-detail-label"><span class="iris-dot"></span>홍채 직경</div>
+            <div class="ratio-detail-value">${irsD}%</div>
+          </div>
+          <div class="ratio-detail-cell">
+            <div class="ratio-detail-label">카테고리</div>
+            <div class="ratio-detail-value" style="font-size:0.72rem">${esc(m.category_name)}</div>
+          </div>
+        </div>
+        <div class="adj-hint"><i class="bi bi-arrows-move me-1"></i>원 안쪽 드래그: 이동 &nbsp;|&nbsp; 원 가장자리 드래그: 크기 조정</div>
+        <button class="btn btn-sm w-100 mt-2" style="background:linear-gradient(135deg,#7C3AED,#4F46E5);color:#fff;border:none;font-size:0.75rem;font-weight:600"
+                onclick="analyzeIrisColors()">
+          <i class="bi bi-palette-fill me-1"></i>홍채 색상 분석
+        </button>
+      </div>`;
+  }).join('<hr style="margin:0;border-color:var(--border)">');
+}
+
+// ── 홍채 색상 분석 ─────────────────────────────────────────────────────────────
+async function analyzeIrisColors() {
+  const measure = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+  if (!measure) { toast('먼저 동공/홍채를 측정해 주세요.', 'error'); return; }
+
+  const g   = measure.geometry;
+  const img = imgEl;
+
+  // 이미지 원본 픽셀 읽기 (오프스크린 캔버스)
+  const ofc  = document.createElement('canvas');
+  ofc.width  = img.naturalWidth;
+  ofc.height = img.naturalHeight;
+  const octx = ofc.getContext('2d');
+  octx.drawImage(img, 0, 0);
+
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+
+  // 정규화 → 원본 픽셀 좌표
+  const pcx = g.pupil.center[0] * iw, pcy = g.pupil.center[1] * ih;
+  const pr  = g.pupil.radius  * iw;
+  const icx = g.iris.center[0]  * iw, icy = g.iris.center[1]  * ih;
+  const ir  = g.iris.radius   * iw;
+
+  // 홍채 면적에 맞는 적응형 간격 (최대 ~8000개 샘플)
+  const irisArea = Math.PI * (ir * ir - pr * pr);
+  const STEP = Math.max(1, Math.ceil(Math.sqrt(irisArea / 30000)));
+
+  const x1 = Math.max(0, Math.floor(icx - ir));
+  const x2 = Math.min(iw - 1, Math.ceil(icx + ir));
+  const y1 = Math.max(0, Math.floor(icy - ir));
+  const y2 = Math.min(ih - 1, Math.ceil(icy + ir));
+
+  const imgData = octx.getImageData(0, 0, iw, ih);
+  const d       = imgData.data;
+  const samples = [];
+
+  for (let y = y1; y <= y2; y += STEP) {
+    for (let x = x1; x <= x2; x += STEP) {
+      const dI = Math.hypot(x - icx, y - icy);
+      const dP = Math.hypot(x - pcx, y - pcy);
+      if (dI > ir || dP < pr) continue;
+
+      const idx = (y * iw + x) * 4;
+      const r = d[idx], gv = d[idx+1], b = d[idx+2];
+      const angle  = ((Math.atan2(y - icy, x - icx) * 180 / Math.PI) + 360) % 360;
+      const radial = Math.max(0, Math.min(1, (dI - pr) / Math.max(1, ir - pr)));
+
+      samples.push({ nx: x/iw, ny: y/ih, r, g: gv, b, angle, radial });
+    }
+  }
+
+  colorSamples  = samples;
+  showColorDots = true;
+  irisRawCache    = { ofc, iw, ih, icx, icy, ir, pcx, pcy, pr };
+  irisOverlayData = null;
+  _buildIrisOverlay();
+
+  // ── 피부색 자동 눈꺼풀 감지 ──────────────────────────────────────────────
+  // 외곽부(radial > 0.5) 픽셀만 검사 — 눈꺼풀은 항상 홍채 바깥쪽에서 침범
+  const skinPerAngle  = new Float32Array(360);
+  const outerPerAngle = new Float32Array(360);
+  for (const s of samples) {
+    if (s.radial < 0.5) continue;
+    const ai = Math.round(s.angle) % 360;
+    outerPerAngle[ai]++;
+    if (isEyelidColor(s.r, s.g, s.b)) skinPerAngle[ai]++;
+  }
+
+  // 각도별 피부색 비율 ≥ 40% → 후보
+  const skinMask = new Uint8Array(360);
+  for (let ai = 0; ai < 360; ai++) {
+    if (outerPerAngle[ai] >= 3 && skinPerAngle[ai] / outerPerAngle[ai] >= 0.40) {
+      skinMask[ai] = 1;
+    }
+  }
+
+  // 연속 10° 이상인 덩어리만 눈꺼풀로 인정 (고립 잡음 제거)
+  const skinFiltered = new Uint8Array(360);
+  for (let ai = 0; ai < 360; ai++) {
+    if (!skinMask[ai]) continue;
+    // 이 각도를 포함하는 연속 구간 길이 계산
+    let run = 1;
+    for (let k = 1; k < 360; k++) { if (skinMask[(ai + k) % 360]) run++; else break; }
+    for (let k = 1; k < 360; k++) { if (skinMask[(ai - k + 360) % 360]) run++; else break; }
+    if (run >= 10) skinFiltered[ai] = 1;
+  }
+
+  // 형태학적 닫힘: 구간 내 작은 빈틈(≤5°) 메우기
+  const CLOSE_R = 5;
+  const skinClosed = new Uint8Array(360);
+  for (let ai = 0; ai < 360; ai++) {
+    if (skinFiltered[ai]) { skinClosed[ai] = 1; continue; }
+    let l = 0, rv = 0;
+    for (let k = 1; k <= CLOSE_R; k++) {
+      if (skinFiltered[(ai - k + 360) % 360]) l++;
+      if (skinFiltered[(ai + k) % 360])       rv++;
+    }
+    if (l >= 3 && rv >= 3) skinClosed[ai] = 1;
+  }
+
+  const skinAngles = Array.from(skinClosed).filter(v => v).length;
+
+  // ① 색상 패널 항상 먼저 표시
+  _buildColorPanel(samples);
+  render();
+  toast(`홍채 색상 분석 완료 — ${samples.length.toLocaleString()}개 픽셀`, 'success', 3000);
+
+  // ② 눈꺼풀 마스크는 그 다음에 적용 (라벨 → 피부색 순 우선순위)
+  try {
+    const labelRes = await fetch(`/api/eyelid/from_labels/${IMAGE_ID}`).then(r => r.json());
+    if (labelRes.count > 0) {
+      _applyEyelidMask(labelRes.mask);
+      return;
+    }
+  } catch {}
+
+  if (skinAngles > 0) {
+    _applyEyelidMask(Array.from(skinClosed));
+  }
+}
+
+function _buildColorPanel(samples) {
+  if (!samples?.length) return;
+
+  // ① 대표 색상 — step=10 버킷 후 유사색 병합 (최대 8 클러스터)
+  const buckets = {};
+  let sumR = 0, sumG = 0, sumB = 0;
+  samples.forEach(({ r, g, b }) => {
+    const qr = Math.round(r/10)*10, qg = Math.round(g/10)*10, qb = Math.round(b/10)*10;
+    const k = `${qr},${qg},${qb}`;
+    if (!buckets[k]) buckets[k] = { sr:0, sg:0, sb:0, n:0 };
+    buckets[k].sr += r; buckets[k].sg += g; buckets[k].sb += b;
+    buckets[k].n++;
+    sumR += r; sumG += g; sumB += b;
+  });
+
+  const total   = samples.length;
+  const avgR = Math.round(sumR/total), avgG = Math.round(sumG/total), avgB = Math.round(sumB/total);
+  const avgHex  = _hex(avgR, avgG, avgB);
+
+  // 빈도순 정렬 후 실제 평균색 계산
+  const sorted = Object.values(buckets)
+    .sort((a,b) => b.n - a.n)
+    .map(bk => ({ r: Math.round(bk.sr/bk.n), g: Math.round(bk.sg/bk.n), b: Math.round(bk.sb/bk.n), n: bk.n }));
+
+  // 탐욕적 클러스터 병합 (개수 제한 없음 — 유사색만 합치고 나머지는 모두 독립 표시)
+  const MERGE_DIST = 30; // 이 거리 이내만 병합 (작을수록 더 세밀하게 구분)
+  const clusters = [];
+  for (const bk of sorted) {
+    let bestDist = Infinity, best = null;
+    for (const cl of clusters) {
+      const dr=cl.r-bk.r, dg=cl.g-bk.g, db=cl.b-bk.b;
+      const d = Math.sqrt(dr*dr+dg*dg+db*db);
+      if (d < bestDist) { bestDist = d; best = cl; }
+    }
+    if (best && bestDist < MERGE_DIST) {
+      const tn = best.n + bk.n;
+      best.r = Math.round((best.r*best.n + bk.r*bk.n)/tn);
+      best.g = Math.round((best.g*best.n + bk.g*bk.n)/tn);
+      best.b = Math.round((best.b*best.n + bk.b*bk.n)/tn);
+      best.n = tn;
+    } else {
+      clusters.push({ ...bk }); // 충분히 다른 색 → 새 클러스터
+    }
+  }
+  const dominant = clusters
+    .sort((a,b) => b.n - a.n)
+    .map(c => ({ hex: _hex(c.r, c.g, c.b), pct: (c.n/total*100).toFixed(1) }));
+  dominantColorHex = dominant[0]?.hex || null;
+
+  // ② HSV 통계
+  const hsvList = samples.map(s => _rgbToHsv(s.r, s.g, s.b));
+  const avgH = Math.round(hsvList.reduce((a,v)=>a+v[0],0)/total);
+  const avgS = (hsvList.reduce((a,v)=>a+v[1],0)/total*100).toFixed(0);
+  const avgV = (hsvList.reduce((a,v)=>a+v[2],0)/total*100).toFixed(0);
+
+  // ③ 패널 렌더 (모달 내부 colorPanelContent 에 삽입)
+  document.getElementById('colorPanelContent').innerHTML = `
+    <!-- 대표 색상 팔레트 -->
+    <div class="cp-section">
+      <div class="cp-label">대표 색상 (${dominant.length}개)</div>
+      <div class="cp-swatches">
+        ${dominant.map(c=>`
+          <div class="cp-swatch" data-hex="${c.hex}" style="background:${c.hex}"
+               title="${c.hex} · ${c.pct}% — 클릭하면 홍채 맵에서 강조"
+               onclick="selectSwatch('${c.hex}')">
+            <span class="cp-swatch-pct">${c.pct}%</span>
+          </div>`).join('')}
+      </div>
+      <div class="cp-selected-info" id="selectedSwatchInfo"></div>
+    </div>
+    <!-- 평균 색상 -->
+    <div class="cp-section cp-avg-row">
+      <span class="cp-label">평균 색상</span>
+      <div class="cp-avg-swatch" style="background:${avgHex}"></div>
+      <code class="cp-hex">${avgHex}</code>
+      <span class="cp-label" style="margin-left:auto">HSV ${avgH}° / ${avgS}% / ${avgV}%</span>
+    </div>
+    <!-- 홍채 색상 맵 (독립 캔버스) -->
+    <div class="cp-section">
+      <div class="cp-label">홍채 색상 맵 <span style="font-weight:400;color:var(--text-muted)">— 색상 점 단독 보기</span></div>
+      <div style="display:flex;justify-content:center;background:#111;border-radius:8px;overflow:hidden;padding:8px">
+        <canvas id="irisColorMapCanvas"
+                style="width:100%;height:auto;border-radius:50%"></canvas>
+      </div>
+    </div>
+    <!-- 구역별 색상 분포 -->
+    <div id="irisZoneGrid" class="cp-section" style="display:none"></div>
+    <div class="cp-section cp-footer">
+      <span>${total.toLocaleString()}개 픽셀 샘플 · 클릭 드래그로 재측정 가능</span>
+    </div>`;
+
+  // 색상 패널 카드 표시 + 라벨설정/비율 패널 접기
+  document.getElementById('colorPanel').style.display = '';
+  const lsBody = document.getElementById('labelSettingsBody');
+  const rpBody = document.getElementById('ratioPanelBody');
+  if (lsBody?.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(lsBody).hide();
+  if (rpBody?.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(rpBody).hide();
+
+  // 캔버스는 DOM 삽입 후 렌더
+  setTimeout(() => {
+    _drawIrisColorMap();
+    _renderZoneGrid();
+  }, 0);
+}
+
+// 홍채 색상 맵: 원본 픽셀 + 구역 오버레이
+function _drawIrisColorMap() {
+  if (!irisRawCache) return;
+  const { ofc, iw, ih, icx, icy, ir, pcx, pcy, pr } = irisRawCache;
+  const mapC = document.getElementById('irisColorMapCanvas');
+  if (!mapC) return;
+
+  // SIZE = 원본 홍채 직경 (최대 1000px, 최소 300px)
+  const SIZE  = Math.max(300, Math.min(1000, Math.round(ir * 2)));
+  mapC.width  = SIZE; mapC.height = SIZE;
+  mapC.style.width  = '100%';
+  mapC.style.height = 'auto';
+
+  const mc    = mapC.getContext('2d');
+  const d     = ofc.getContext('2d').getImageData(0, 0, iw, ih).data;
+  const ov    = mc.createImageData(SIZE, SIZE);
+  const od    = ov.data;
+  const ir2   = ir*ir, pr2 = pr*pr;
+  const scale = (ir*2) / SIZE;
+
+  for (let my = 0; my < SIZE; my++) {
+    for (let mx = 0; mx < SIZE; mx++) {
+      const ix = Math.round(icx + (mx - SIZE/2) * scale);
+      const iy = Math.round(icy + (my - SIZE/2) * scale);
+      if (ix<0||ix>=iw||iy<0||iy>=ih) continue;
+      const dIx=ix-icx, dIy=iy-icy, dPx=ix-pcx, dPy=iy-pcy;
+      const inIris  = dIx*dIx+dIy*dIy <= ir2;
+      const inPupil = dPx*dPx+dPy*dPy < pr2;
+      if (!inIris) continue;
+      if (inPupil && !showPupilShape) continue;
+      const si=(iy*iw+ix)*4, di=(my*SIZE+mx)*4;
+      od[di]=d[si]; od[di+1]=d[si+1]; od[di+2]=d[si+2]; od[di+3]=255;
+    }
+  }
+  // ── 선택 색상 하이라이트 (다중 선택) ────────────────────────────────────
+  if (selectedSwatches.size > 0) {
+    const TOL2 = 45*45;
+    const targets = [...selectedSwatches].map(h => ({
+      r: parseInt(h.slice(1,3),16),
+      g: parseInt(h.slice(3,5),16),
+      b: parseInt(h.slice(5,7),16),
+    }));
+    for (let i = 0; i < od.length; i += 4) {
+      if (od[i+3] === 0) continue;
+      const matched = targets.some(({r,g,b}) => {
+        const dr=od[i]-r, dg=od[i+1]-g, db=od[i+2]-b;
+        return dr*dr + dg*dg + db*db <= TOL2;
+      });
+      if (!matched) {
+        od[i] = od[i]*0.1|0; od[i+1] = od[i+1]*0.1|0; od[i+2] = od[i+2]*0.1|0;
+      } else {
+        od[i]   = Math.min(255, od[i]  *1.4|0);
+        od[i+1] = Math.min(255, od[i+1]*1.4|0);
+        od[i+2] = Math.min(255, od[i+2]*1.4|0);
+      }
+    }
+  }
+
+  // ── 로컬 대비 이상 탐지 오버레이 ──────────────────────────────────────────
+  if (showContrastMap) {
+    const WIN = 5; // 탐지 창 반경 (픽셀)
+    const THRESH = 28;  // 이 이상 차이나면 이상 부위로 판단
+    const MAX_C  = 75;  // 이 이상이면 최대 강조
+    const contrast = new Float32Array(SIZE * SIZE);
+
+    for (let my = WIN; my < SIZE - WIN; my++) {
+      for (let mx = WIN; mx < SIZE - WIN; mx++) {
+        const di = (my * SIZE + mx) * 4;
+        if (od[di + 3] === 0) continue;
+        let sr = 0, sg = 0, sb = 0, n = 0;
+        for (let dy = -WIN; dy <= WIN; dy++) {
+          for (let dx = -WIN; dx <= WIN; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const ni = ((my + dy) * SIZE + (mx + dx)) * 4;
+            if (od[ni + 3] === 0) continue;
+            sr += od[ni]; sg += od[ni + 1]; sb += od[ni + 2]; n++;
+          }
+        }
+        if (n < 8) continue;
+        const dr = od[di] - sr/n, dg = od[di+1] - sg/n, db = od[di+2] - sb/n;
+        contrast[my * SIZE + mx] = Math.sqrt(dr*dr + dg*dg + db*db);
+      }
+    }
+
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const c = contrast[i];
+      if (c < THRESH) continue;
+      const di = i * 4;
+      if (od[di + 3] === 0) continue;
+      const t = Math.min(1, (c - THRESH) / (MAX_C - THRESH));
+      // 노랑(255,220,0) → 빨강(255,0,0)
+      const hr = 255, hg = Math.round(220 * (1 - t)), hb = 0;
+      const alpha = 0.45 + 0.45 * t;
+      od[di]   = Math.min(255, od[di]   * (1 - alpha) + hr * alpha) | 0;
+      od[di+1] = Math.min(255, od[di+1] * (1 - alpha) + hg * alpha) | 0;
+      od[di+2] = Math.min(255, od[di+2] * (1 - alpha) + hb * alpha) | 0;
+    }
+  }
+
+  // ── 밝기 단계 오버레이 (대표색 기준 ±1, ±2) ────────────────────────────
+  if (showBrightnessMap && dominantColorHex && colorSamples?.length) {
+    const dr0 = parseInt(dominantColorHex.slice(1,3),16);
+    const dg0 = parseInt(dominantColorHex.slice(3,5),16);
+    const db0 = parseInt(dominantColorHex.slice(5,7),16);
+    const L0  = 0.299*dr0 + 0.587*dg0 + 0.114*db0;
+
+    // 홍채 샘플로 밝기 편차 계산 → 1단위 = 0.8 표준편차
+    const lums = colorSamples.map(s => 0.299*s.r + 0.587*s.g + 0.114*s.b);
+    const meanL = lums.reduce((a,v)=>a+v,0) / lums.length;
+    const varL  = lums.reduce((a,v)=>a+(v-meanL)**2,0) / lums.length;
+    const STEP  = Math.max(8, Math.sqrt(varL) * 0.8);
+
+    // +2: 하늘색, +1: 연노랑, -1: 주황, -2: 진빨강
+    const LC = { p2:[130,220,255], p1:[255,235,80], m1:[255,130,50], m2:[200,50,40] };
+    const ALPHA = 0.62;
+
+    for (let i = 0; i < od.length; i += 4) {
+      if (od[i+3] === 0) continue;
+      const L = 0.299*od[i] + 0.587*od[i+1] + 0.114*od[i+2];
+      const d = L - L0;
+      let lc = null;
+      if      (d >  1.5*STEP) lc = LC.p2;
+      else if (d >  0.5*STEP) lc = LC.p1;
+      else if (d < -1.5*STEP) lc = LC.m2;
+      else if (d < -0.5*STEP) lc = LC.m1;
+      if (!lc) continue;
+      od[i]   = Math.min(255, od[i]   * (1-ALPHA) + lc[0] * ALPHA) | 0;
+      od[i+1] = Math.min(255, od[i+1] * (1-ALPHA) + lc[1] * ALPHA) | 0;
+      od[i+2] = Math.min(255, od[i+2] * (1-ALPHA) + lc[2] * ALPHA) | 0;
+    }
+  }
+
+  mc.putImageData(ov, 0, 0);
+
+  // ── 눈꺼풀 차폐 영역 오버레이 ─────────────────────────────────────────────
+  if (showEyelidMask) {
+    mc.save();
+    mc.fillStyle = 'rgba(80,80,80,0.60)';
+
+    if (eyelidPolygons && eyelidPolygons.length > 0) {
+      // 정규화 좌표 → 색상 맵 캔버스 좌표 변환
+      const toMx = nx => SIZE / 2 + (nx * iw - icx) / scale;
+      const toMy = ny => SIZE / 2 + (ny * ih - icy) / scale;
+      const left = toMx(0), right = toMx(1);
+      const top  = toMy(0), bottom = toMy(1);
+
+      for (const lbl of eyelidPolygons) {
+        const coords = lbl.coords;
+        if (!coords || coords.length < 2) continue;
+        const firstMx = toMx(coords[0][0]);
+        const lastMx  = toMx(coords[coords.length - 1][0]);
+        mc.beginPath();
+        mc.moveTo(firstMx, toMy(coords[0][1]));
+        for (let i = 1; i < coords.length; i++) {
+          mc.lineTo(toMx(coords[i][0]), toMy(coords[i][1]));
+        }
+        if (lbl.is_upper) {
+          mc.lineTo(lastMx,  top);
+          mc.lineTo(firstMx, top);
+        } else {
+          mc.lineTo(lastMx,  bottom);
+          mc.lineTo(firstMx, bottom);
+        }
+        mc.closePath();
+        mc.fill();
+      }
+    } else if (eyelidMask) {
+      // AI/규칙 기반 폴백 — 각도 부채꼴
+      const cx0 = SIZE / 2, cy0 = SIZE / 2;
+      const r1m = (pr / ir) * (SIZE / 2);
+      const r2m = SIZE / 2;
+      let ai = 0;
+      while (ai < 360) {
+        if (!eyelidMask[ai]) { ai++; continue; }
+        let aj = ai;
+        while (aj < 360 && eyelidMask[aj]) aj++;
+        const a1 = (ai / 360) * 2 * Math.PI;
+        const a2 = (aj / 360) * 2 * Math.PI;
+        mc.beginPath();
+        mc.arc(cx0, cy0, r2m, a1, a2);
+        mc.arc(cx0, cy0, r1m, a2, a1, true);
+        mc.closePath();
+        mc.fill();
+        ai = aj;
+      }
+    }
+
+    mc.restore();
+  }
+
+  if (showIrisZones) {
+    // ── 동심원 구역 오버레이 ───────────────────────────────────────────────
+    // 동공 감지(파란 파선) 활성 시: 동공 중심 + 감지된 반경 기준
+    // 미감지 시: 홍채 중심 + iris_measure 기준 폴백
+    let cx2, cy2, pupilR2, irisR2;
+    if (pupilShape?.points) {
+      cx2     = SIZE/2 + (pcx - icx) / scale;   // 동공 중심 (맵 좌표)
+      cy2     = SIZE/2 + (pcy - icy) / scale;
+      pupilR2 = pupilShape.avgR / scale;          // 파란 파선 반경과 동일
+      irisR2  = SIZE/2;                           // 홍채 외경 (맵 기준)
+    } else {
+      cx2     = SIZE/2;
+      cy2     = SIZE/2;
+      pupilR2 = (pr / ir) * (SIZE/2);
+      irisR2  = SIZE/2;
+    }
+
+    RADIAL_ZONES.forEach((zone, zi) => {
+      if (selectedZones && !selectedZones.has(zi)) return;
+      const r1 = pupilR2 + zone.from * (irisR2 - pupilR2);
+      const r2 = pupilR2 + zone.to   * (irisR2 - pupilR2);
+      mc.save();
+      mc.globalAlpha = 0.38;
+      mc.fillStyle = zone.color;
+      mc.beginPath();
+      mc.arc(cx2, cy2, r2, 0, Math.PI*2, false);
+      mc.arc(cx2, cy2, r1, 0, Math.PI*2, true);
+      mc.fill();
+      mc.restore();
+    });
+
+    mc.save(); mc.strokeStyle = 'rgba(255,255,255,0.6)'; mc.lineWidth = 0.8;
+    RADIAL_ZONES.forEach((zone, zi) => {
+      if (selectedZones && !selectedZones.has(zi)) return;
+      const r = pupilR2 + zone.from * (irisR2 - pupilR2);
+      if (zone.from === 0) return;
+      mc.beginPath(); mc.arc(cx2, cy2, r, 0, Math.PI*2); mc.stroke();
+    });
+    mc.restore();
+
+  }
+
+  // ── 자율신경환 가이드 원 (영양·흡수 링 정중앙 = radial 0.33) ──────────────
+  if (showAutoNerveGuide) {
+    // 구분표와 동일한 중심/반경 계산
+    const zCx = pupilShape?.points ? SIZE/2 + (pcx - icx) / scale : SIZE/2;
+    const zCy = pupilShape?.points ? SIZE/2 + (pcy - icy) / scale : SIZE/2;
+    const zPr = pupilShape?.points ? pupilShape.avgR / scale : (pr / ir) * (SIZE/2);
+    const zIr = SIZE/2;
+    const AUTO_NERVE_FRAC = (0.22 + 0.44) / 2; // 영양·흡수 링 중간 = 0.33
+    const nerveR = zPr + AUTO_NERVE_FRAC * (zIr - zPr);
+    mc.save();
+    if (autoNerveBlur > 0) mc.filter = `blur(${autoNerveBlur}px)`;
+    mc.beginPath();
+    mc.arc(zCx, zCy, nerveR, 0, Math.PI * 2);
+    mc.strokeStyle = '#a78bfa';
+    mc.lineWidth   = autoNerveLineWidth;
+    mc.setLineDash([6, 4]);
+    mc.globalAlpha = autoNerveOpacity;
+    mc.stroke();
+    mc.restore();
+  }
+
+  // ── 동공 윤곽 + 기준원 비교 + 편차 분석 ─────────────────────────────────
+  if (showPupilShape && pupilShape?.points) {
+    const { points, deviations, N: NP, avgR: avgRorig,
+            rmsDeviation, maxDev, maxDevAngle, minR: mnR, maxR: mxR } = pupilShape;
+    const pcx_map = SIZE/2 + (pcx - icx) / scale;
+    const pcy_map = SIZE/2 + (pcy - icy) / scale;
+    const avgRmap = avgRorig / scale;
+    const AMPL = 5; // 편차 5배 증폭 (미세 일그러짐 시각화)
+
+    // ① 기준원 — 평균 반경 (파란 파선)
+    mc.save();
+    mc.beginPath();
+    mc.arc(pcx_map, pcy_map, avgRmap, 0, Math.PI*2);
+    mc.strokeStyle = '#88AAFF';
+    mc.lineWidth   = 1.2;
+    mc.globalAlpha = 0.80;
+    mc.setLineDash([5, 3]);
+    mc.stroke();
+    mc.setLineDash([]);
+    mc.restore();
+
+    // ② 실제 감지 윤곽 (분홍 실선)
+    mc.save();
+    mc.beginPath();
+    for (let i = 0; i <= NP; i++) {
+      const theta = ((i % NP) / NP) * 2 * Math.PI;
+      const rMap  = points[i % NP] / scale;
+      const px = pcx_map + rMap * Math.cos(theta);
+      const py = pcy_map + rMap * Math.sin(theta);
+      if (i === 0) mc.moveTo(px, py); else mc.lineTo(px, py);
+    }
+    mc.closePath();
+    mc.strokeStyle = '#FF2D78';
+    mc.lineWidth   = 1.8;
+    mc.globalAlpha = 0.90;
+    mc.stroke();
+    mc.restore();
+
+    // ③ 편차 막대 (5x 증폭, 밖=빨강/안=파랑, 5°마다)
+    mc.save();
+    for (let ai = 0; ai < NP; ai += 10) { // 720방향 기준 5°마다
+      const dev = deviations[ai];
+      if (Math.abs(dev) < 0.2) continue;
+      const theta = (ai / NP) * 2 * Math.PI;
+      const cosT = Math.cos(theta), sinT = Math.sin(theta);
+      const r1 = avgRmap;
+      const r2 = avgRmap + (dev * AMPL) / scale;
+      mc.beginPath();
+      mc.moveTo(pcx_map + r1*cosT, pcy_map + r1*sinT);
+      mc.lineTo(pcx_map + r2*cosT, pcy_map + r2*sinT);
+      mc.strokeStyle  = dev > 0 ? '#FF4444' : '#4488FF';
+      mc.lineWidth    = 1.2;
+      mc.globalAlpha  = 0.72;
+      mc.stroke();
+    }
+    mc.restore();
+
+    // ④ 최대 편차 방향 표시 (화살표 형태)
+    mc.save();
+    const thetaMax = (maxDevAngle / NP) * 2 * Math.PI;
+    const r1m = avgRmap, r2m = avgRmap + (deviations[maxDevAngle] * AMPL) / scale;
+    mc.beginPath();
+    mc.moveTo(pcx_map + r1m*Math.cos(thetaMax), pcy_map + r1m*Math.sin(thetaMax));
+    mc.lineTo(pcx_map + r2m*Math.cos(thetaMax), pcy_map + r2m*Math.sin(thetaMax));
+    mc.strokeStyle = '#FFD700';
+    mc.lineWidth   = 2.5;
+    mc.globalAlpha = 0.95;
+    mc.stroke();
+    mc.restore();
+
+  }
+
+  // ── 자율신경환 불규칙 윤곽선 (방사 섬유 끝점 연결) ──────────────────────
+  if (showCollRing && collRing?.radii) {
+    const { radii, N: NA, avgR } = collRing;
+    const cxa = SIZE/2, cya = SIZE/2;
+    const prA = (pr/ir) * (SIZE/2);
+    const irisW = SIZE/2;
+
+    // 폴리곤 경로 생성
+    mc.save();
+    mc.beginPath();
+    for (let i = 0; i <= NA; i++) {
+      const theta = ((i % NA) / NA) * 2 * Math.PI;
+      const rPx = prA + radii[i % NA] * (irisW - prA);
+      const px = cxa + rPx * Math.cos(theta);
+      const py = cya + rPx * Math.sin(theta);
+      if (i === 0) mc.moveTo(px, py); else mc.lineTo(px, py);
+    }
+    mc.closePath();
+
+    // 내부(부교감신경 구역) 파랑 반투명 채우기
+    mc.globalAlpha = 0.14;
+    mc.fillStyle = '#4488FF';
+    mc.fill();
+
+    // 자율신경환 윤곽선
+    mc.globalAlpha = 0.88;
+    mc.strokeStyle = '#00E5CC';
+    mc.lineWidth = 1.8;
+    mc.stroke();
+    mc.restore();
+
+    // 라벨
+    const midPx = prA + avgR * (irisW - prA);
+    const fsA = Math.max(9, SIZE/42|0);
+    mc.save();
+    mc.font = `bold ${fsA}px sans-serif`;
+    mc.textAlign = 'center'; mc.textBaseline = 'middle';
+    mc.fillStyle = 'rgba(0,0,0,0.65)';
+    mc.fillText('자율신경환', cxa + 1, cya - midPx + 1);
+    mc.fillStyle = '#00E5CC';
+    mc.fillText('자율신경환', cxa, cya - midPx);
+    mc.restore();
+  }
+
+  // ── 밝기 단계 범례 ────────────────────────────────────────────────────────
+  if (showBrightnessMap) {
+    const items = [
+      { color:'#82DCFF', label:'+2단계 (밝음)' },
+      { color:'#FFEB50', label:'+1단계 (약간 밝음)' },
+      { color:'#888888', label:'기준 (대표색)' },
+      { color:'#FF8232', label:'-1단계 (약간 어두움)' },
+      { color:'#C83228', label:'-2단계 (어두움)' },
+    ];
+    const fs = Math.max(9, SIZE/45|0);
+    const bw = 11, bh = 11, gap = 3, pad = 8;
+    const lh = bh + gap;
+    const totalH = items.length * lh + pad;
+    const lx = pad, ly = SIZE - totalH;
+
+    mc.save();
+    mc.fillStyle = 'rgba(0,0,0,0.55)';
+    mc.fillRect(lx - 3, ly - 3, 120*(fs/10), totalH + 4);
+    mc.font = `${fs}px sans-serif`;
+    mc.textBaseline = 'middle';
+    items.forEach((item, i) => {
+      const y = ly + i * lh;
+      if (item.color === '#888888' && dominantColorHex) {
+        mc.fillStyle = dominantColorHex;
+      } else {
+        mc.fillStyle = item.color;
+      }
+      mc.fillRect(lx, y, bw, bh);
+      mc.strokeStyle = 'rgba(255,255,255,0.4)';
+      mc.lineWidth = 0.5;
+      mc.strokeRect(lx, y, bw, bh);
+      mc.fillStyle = '#fff';
+      mc.fillText(item.label, lx + bw + 4, y + bh/2);
+    });
+    mc.restore();
+  }
+}
+
+// 동심원 구역별 평균 색상 계산 (radial: 0=동공, 1=외경)
+// 눈꺼풀 마스크가 활성화된 경우 해당 각도 샘플 제외 → 순수 홍채 색상만 반영
+function _calcZoneColors() {
+  return RADIAL_ZONES.map(zone => {
+    const samples = (colorSamples||[]).filter(s => {
+      if (s.radial < zone.from || s.radial >= zone.to) return false;
+      if (showEyelidMask && eyelidMask && eyelidMask[Math.round(s.angle) % 360]) return false;
+      return true;
+    });
+    if (!samples.length) return { ...zone, avgHex:'#555555', top3:[] };
+    let sR=0,sG=0,sB=0;
+    const bk={};
+    samples.forEach(({r,g,b})=>{
+      sR+=r; sG+=g; sB+=b;
+      const k=`${Math.round(r/32)*32},${Math.round(g/32)*32},${Math.round(b/32)*32}`;
+      if(!bk[k]) bk[k]={r:Math.round(r/32)*32,g:Math.round(g/32)*32,b:Math.round(b/32)*32,n:0};
+      bk[k].n++;
+    });
+    const n = samples.length;
+    return {
+      ...zone,
+      avgHex: _hex(Math.round(sR/n),Math.round(sG/n),Math.round(sB/n)),
+      top3:   Object.values(bk).sort((a,b)=>b.n-a.n).slice(0,3).map(c=>_hex(c.r,c.g,c.b)),
+      count:  n,
+    };
+  });
+}
+
+// 구역 그리드 렌더
+function _renderZoneGrid() {
+  const el = document.getElementById('irisZoneGrid');
+  if (!el) return;
+  if (!showIrisZones || !colorSamples?.length) { el.style.display='none'; return; }
+  const zd = _calcZoneColors();
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="cp-label" style="margin-bottom:6px">동심원 구역별 홍채 색상${showEyelidMask ? ' <span style="font-size:0.55rem;color:#a78bfa;font-weight:400">(눈꺼풀 제외)</span>' : ''}</div>
+    <div style="padding:0 8px 10px;display:flex;flex-direction:column;gap:5px">
+      ${zd.filter((_,i)=>!selectedZones || selectedZones.has(i)).map((z,i)=>`
+        <div style="display:flex;align-items:center;gap:8px;background:#1a1a2e;border-radius:7px;padding:6px 8px">
+          <div style="width:14px;height:14px;border-radius:50%;background:${z.color};border:1px solid rgba(255,255,255,0.3);flex-shrink:0"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:0.62rem;color:#ccc;font-weight:600;margin-bottom:2px">
+              ${i+1}층 · ${z.label}
+              <span style="color:#555;font-weight:400;font-size:0.55rem"> (동공에서 ${Math.round(z.from*100)}–${Math.round(z.to*100)}%)</span>
+            </div>
+            <div style="display:flex;gap:3px;align-items:center">
+              <div style="width:32px;height:14px;border-radius:3px;background:${z.avgHex};flex-shrink:0"></div>
+              <div style="display:flex;gap:2px">
+                ${z.top3.map(h=>`<div style="width:12px;height:12px;border-radius:2px;background:${h}" title="${h}"></div>`).join('')}
+              </div>
+              <code style="font-size:0.5rem;color:#555;margin-left:auto">${z.avgHex}</code>
+            </div>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function selectSwatch(hex) {
+  if (selectedSwatches.has(hex)) selectedSwatches.delete(hex);
+  else                            selectedSwatches.add(hex);
+
+  document.querySelectorAll('.cp-swatch').forEach(el => {
+    const on = selectedSwatches.has(el.dataset.hex);
+    el.style.outline       = on ? '3px solid #fff' : '';
+    el.style.outlineOffset = on ? '2px' : '';
+    el.style.transform     = on ? 'scale(1.18)' : '';
+    el.style.zIndex        = on ? '2' : '';
+    el.style.position      = on ? 'relative' : '';
+    el.style.boxShadow     = on ? `0 0 8px 3px ${el.dataset.hex}` : '';
+  });
+
+  // 선택된 색상 hex 코드 표시
+  const info = document.getElementById('selectedSwatchInfo');
+  if (info) {
+    info.innerHTML = [...selectedSwatches].map(h => `
+      <div class="cp-selected-chip">
+        <div class="cp-selected-chip-dot" style="background:${h}"></div>
+        <code>${h}</code>
+      </div>`).join('');
+  }
+
+  _drawIrisColorMap();
+}
+
+function toggleZones() {
+  showIrisZones = !showIrisZones;
+  const btn = document.getElementById('zoneToggleBtn');
+  if (btn) {
+    btn.classList.toggle('active-dot-btn', showIrisZones);
+    btn.innerHTML = showIrisZones
+      ? '<i class="bi bi-pie-chart-fill"></i> 구분표 끄기'
+      : '<i class="bi bi-pie-chart"></i> 구분표';
+  }
+  const panel = document.getElementById('zoneRingBtns');
+  if (panel) panel.style.display = showIrisZones ? 'block' : 'none';
+  _drawIrisColorMap();
+  _renderZoneGrid();
+}
+
+function _initZoneRingBtns() {
+  const group = document.getElementById('zoneRingBtnGroup');
+  if (!group || group.children.length > 0) return;
+  RADIAL_ZONES.forEach((zone, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-xs active-dot-btn';
+    btn.style.cssText = `border-left:3px solid ${zone.color === '#FFFFFF' ? '#ccc' : zone.color};padding:2px 8px;font-size:0.68rem;border-radius:12px`;
+    btn.textContent = zone.label;
+    btn.dataset.zoneIdx = i;
+    btn.onclick = () => {
+      if (selectedZones.has(i)) selectedZones.delete(i);
+      else selectedZones.add(i);
+      btn.classList.toggle('active-dot-btn', selectedZones.has(i));
+      _drawIrisColorMap();
+      _renderZoneGrid();
+    };
+    group.appendChild(btn);
+  });
+}
+// 버튼 초기화 (DOM 준비 후)
+document.addEventListener('DOMContentLoaded', _initZoneRingBtns);
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && (S.drawing || BZ.active)) { cancelDrawing(); return; }
+  if (e.key === 'Backspace' && (S.drawing || BZ.active)) {
+    e.preventDefault();
+    undoLastPoint();
+    return;
+  }
+  if (e.key === 'Enter') {
+    if (S.tool === 'bezier' && BZ.active && BZ.anchors.length >= 3) {
+      finishBezier(true);
+    } else if (S.drawing) {
+      finishDrawing();
+    }
+  }
+});
+setTimeout(_initZoneRingBtns, 200);
+
+function toggleAutoNerveGuide() {
+  showAutoNerveGuide = !showAutoNerveGuide;
+  const btn  = document.getElementById('autoNerveGuideBtn');
+  const ctrl = document.getElementById('autoNerveControls');
+  if (btn)  btn.classList.toggle('active-dot-btn', showAutoNerveGuide);
+  if (ctrl) ctrl.style.display = showAutoNerveGuide ? 'flex' : 'none';
+  _drawIrisColorMap();
+}
+
+function toggleContrastMap() {
+  showContrastMap = !showContrastMap;
+  const btn = document.getElementById('contrastToggleBtn');
+  if (btn) {
+    btn.classList.toggle('active-dot-btn', showContrastMap);
+    btn.innerHTML = showContrastMap
+      ? '<i class="bi bi-eye-fill"></i> 대비 끄기'
+      : '<i class="bi bi-eye"></i> 대비';
+  }
+  _drawIrisColorMap();
+}
+
+function toggleBrightnessMap() {
+  showBrightnessMap = !showBrightnessMap;
+  const btn = document.getElementById('brightnessToggleBtn');
+  if (btn) {
+    btn.classList.toggle('active-dot-btn', showBrightnessMap);
+    btn.innerHTML = showBrightnessMap
+      ? '<i class="bi bi-brightness-high-fill"></i> 밝기 끄기'
+      : '<i class="bi bi-brightness-high"></i> 밝기';
+  }
+  _drawIrisColorMap();
+}
+
+function _applyEyelidMask(maskArray) {
+  const N = 360;
+  eyelidMask     = new Uint8Array(maskArray);
+  showEyelidMask = true;
+
+  const btn = document.getElementById('eyelidBtn');
+  if (btn) {
+    btn.classList.add('active-dot-btn');
+    btn.innerHTML = '<i class="bi bi-eye-slash-fill"></i> 눈꺼풀 끄기';
+  }
+
+  const visibleSamples = (colorSamples || []).filter(s => !eyelidMask[Math.round(s.angle) % N]);
+  _buildColorPanel(visibleSamples);
+  _drawIrisColorMap();
+  render();
+
+  const occPct = (Array.from(eyelidMask).filter(v => v).length / N * 100).toFixed(0);
+  toast(`눈꺼풀 감지 완료 — ${occPct}% 차폐 영역 제외됨`, 'success', 5000);
+}
+
+async function detectEyelidMask() {
+  const btn = document.getElementById('eyelidBtn');
+
+  // 토글 OFF
+  if (showEyelidMask) {
+    showEyelidMask = false; eyelidMask = null; eyelidPolygons = null;
+    if (btn) { btn.classList.remove('active-dot-btn'); btn.innerHTML = '<i class="bi bi-eye-slash"></i> 눈꺼풀'; }
+    _buildColorPanel(colorSamples);
+    _drawIrisColorMap(); render();
+    return;
+  }
+
+  if (!irisRawCache) { toast('먼저 색상 분석을 실행하세요.', 'error'); return; }
+
+  if (btn) btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 감지 중...';
+
+  // ① 이미 라벨링한 눈꺼풀 라벨이 있으면 좌표 직접 사용 ──────────────────
+  try {
+    const labelRes = await fetch(`/api/eyelid/from_labels/${IMAGE_ID}`).then(r => r.json());
+    if (labelRes.count > 0) {
+      eyelidPolygons = labelRes.labels;   // 원본 좌표 저장 → 직접 그리기에 사용
+      _applyEyelidMask(labelRes.mask);
+      toast(`라벨 기반 눈꺼풀 적용 — ${labelRes.count}개 라벨 사용`, 'success', 4000);
+      return;
+    }
+  } catch {}
+
+  // ② 학습 모델이 있으면 AI 예측 ─────────────────────────────────────────────
+  let statusRes;
+  try { statusRes = await fetch('/api/eyelid/status').then(r => r.json()); }
+  catch { statusRes = { model_exists: false }; }
+
+  if (statusRes.model_exists) {
+    // AI 모델 예측
+    const measure = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+    if (!measure) { toast('홍채 측정값이 없습니다.', 'error'); return; }
+
+    try {
+      const res = await fetch(`/api/eyelid/detect/${IMAGE_ID}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iris_geometry: measure.geometry }),
+      }).then(r => r.json());
+
+      if (res.error) { toast(`감지 실패: ${res.error}`, 'error'); return; }
+      _applyEyelidMask(res.mask);
+    } catch(e) {
+      toast('서버 오류: ' + e.message, 'error');
+    }
+    return;
+  }
+
+  // ── 규칙 기반 (모델 없을 때) ───────────────────────────────────────────────
+  toast('학습 모델 없음 — 규칙 기반으로 감지합니다.', 'info', 3000);
+  const { ofc, iw, ih, icx, icy, ir, pcx, pcy, pr } = irisRawCache;
+  const d = ofc.getContext('2d').getImageData(0, 0, iw, ih).data;
+  const N = 360;
+  const raw = new Uint8Array(N);
+  const SCAN_STEPS = 16;
+
+  // 홍채 링 평균 밝기 계산 (적응형 임계값 기준)
+  let sumLum = 0, cntLum = 0;
+  for (let ai = 0; ai < N; ai += 4) {
+    const theta = (ai / N) * 2 * Math.PI;
+    const rMid = (ir + pr) * 0.5;
+    const px = Math.round(icx + rMid * Math.cos(theta));
+    const py = Math.round(icy + rMid * Math.sin(theta));
+    if (px >= 0 && px < iw && py >= 0 && py < ih) {
+      const idx = (py * iw + px) * 4;
+      sumLum += 0.299*d[idx] + 0.587*d[idx+1] + 0.114*d[idx+2];
+      cntLum++;
+    }
+  }
+  const avgIrisLum = cntLum > 0 ? sumLum / cntLum : 100;
+  // 홍채보다 훨씬 어두우면 속눈썹/눈꺼풀 어두운 부분
+  const DARK_THRESH = Math.min(45, avgIrisLum * 0.35);
+
+  for (let ai = 0; ai < N; ai++) {
+    const theta = (ai / N) * 2 * Math.PI;
+    const ct = Math.cos(theta), st = Math.sin(theta);
+    let darkCount = 0, skinCount = 0, outerTotal = 0, total = 0;
+
+    for (let si = 0; si < SCAN_STEPS; si++) {
+      const t = si / (SCAN_STEPS - 1);
+      const r = ir * (0.60 + 0.70 * t);  // 60%~130% of iris radius
+      const px = Math.round(icx + r * ct), py = Math.round(icy + r * st);
+      if (px < 0 || px >= iw || py < 0 || py >= ih) continue;
+      const idx = (py * iw + px) * 4;
+      const rv = d[idx], gv = d[idx+1], bv = d[idx+2];
+      const lum = 0.299*rv + 0.587*gv + 0.114*bv;
+      if (lum < DARK_THRESH) darkCount++;
+      total++;
+      if (t > 0.4) {  // 피부색은 외곽부에서만 검사
+        outerTotal++;
+        if (isEyelidColor(rv, gv, bv)) skinCount++;
+      }
+    }
+    const skinRatio = outerTotal > 0 ? skinCount / outerTotal : 0;
+    const darkRatio = total > 0 ? darkCount / total : 0;
+    raw[ai] = (skinRatio >= 0.40 || darkRatio >= 0.20) ? 1 : 0;
+  }
+  const closed = new Uint8Array(N);
+  const CLOSE_R = 6;
+  for (let ai = 0; ai < N; ai++) {
+    if (raw[ai]) { closed[ai] = 1; continue; }
+    let l = 0, r = 0;
+    for (let k = 1; k <= CLOSE_R; k++) {
+      if (raw[(ai - k + N) % N]) l++;
+      if (raw[(ai + k) % N])     r++;
+    }
+    closed[ai] = (l >= 3 && r >= 3) ? 1 : 0;
+  }
+  _applyEyelidMask(Array.from(closed));
+}
+
+function detectPupilShape() {
+  const btn = document.getElementById('pupilShapeBtn');
+
+  if (showPupilShape) {
+    showPupilShape = false; pupilShape = null;
+    if (btn) { btn.classList.remove('active-dot-btn'); btn.innerHTML = '<i class="bi bi-circle"></i> 동공'; }
+    _drawIrisColorMap(); render();
+    return;
+  }
+
+  if (!irisRawCache) { toast('먼저 색상 분석을 실행하세요.', 'error'); return; }
+  const { ofc, iw, ih, icx, icy, ir, pcx, pcy, pr } = irisRawCache;
+  const d = ofc.getContext('2d').getImageData(0, 0, iw, ih).data;
+
+  // ① 동공 중심부 밝기 (어두운 기준값)
+  let darkSum = 0, darkN = 0;
+  const cr = Math.max(3, Math.round(pr * 0.4));
+  for (let y = Math.floor(pcy-cr); y <= Math.ceil(pcy+cr); y++) {
+    for (let x = Math.floor(pcx-cr); x <= Math.ceil(pcx+cr); x++) {
+      if (x<0||x>=iw||y<0||y>=ih) continue;
+      if ((x-pcx)**2+(y-pcy)**2 > cr*cr) continue;
+      const idx=(y*iw+x)*4;
+      darkSum += 0.299*d[idx]+0.587*d[idx+1]+0.114*d[idx+2];
+      darkN++;
+    }
+  }
+  const darkL = darkN ? darkSum/darkN : 15;
+
+  // ② 홍채 중간부 밝기 (밝은 기준값)
+  let brightSum = 0, brightN = 0;
+  const br = pr + (ir-pr)*0.5;
+  const bSamples = 36;
+  for (let ai = 0; ai < bSamples; ai++) {
+    const t = (ai/bSamples)*2*Math.PI;
+    const px2 = Math.round(icx + br*Math.cos(t));
+    const py2 = Math.round(icy + br*Math.sin(t));
+    if (px2<0||px2>=iw||py2<0||py2>=ih) continue;
+    const idx=(py2*iw+px2)*4;
+    brightSum += 0.299*d[idx]+0.587*d[idx+1]+0.114*d[idx+2];
+    brightN++;
+  }
+  const brightL = brightN ? brightSum/brightN : 100;
+
+  // ③ 720방향 × 임계값 첫 교차 탐색 (동공 내부 어두움 → 홍채 밝음 첫 번째 교차 지점)
+  const N_ANGLES = 720;                    // 0.5° 간격
+  const MAX_R    = Math.round(pr * 1.7);
+  const rawPoints = new Float32Array(N_ANGLES);
+  const peakGrads = new Float32Array(N_ANGLES); // 각도별 교차 기울기 (신뢰도)
+
+  // 반경 방향 밝기 샘플 함수 (0.5px 단계, 쌍선형 보간)
+  function sampleL(cx, cy, dist, ct, st) {
+    const fx = cx + dist * ct, fy = cy + dist * st;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+    const x1 = x0 + 1,        y1 = y0 + 1;
+    const tx = fx - x0,        ty = fy - y0;
+    const getL = (x, y) => {
+      if (x < 0 || x >= iw || y < 0 || y >= ih) return -1;
+      const i = (y * iw + x) * 4;
+      return 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+    };
+    const l00 = getL(x0,y0), l10 = getL(x1,y0);
+    const l01 = getL(x0,y1), l11 = getL(x1,y1);
+    if (l00 < 0) return -1;
+    return (l00*(1-tx)+l10*tx)*(1-ty) + (l01*(1-tx)+l11*tx)*ty;
+  }
+
+  const STEP         = 0.5;
+  const GLARE_THRESH = 170;  // 이 이상이면 빛반사 → 직전 밝기로 대체
+  const maxSteps     = Math.ceil(MAX_R / STEP);
+
+  // 경계 임계값: 동공 내부(darkL)와 홍채 중간(brightL) 사이 25% 지점 (검정 영역 끝 추적)
+  const EDGE_THRESH    = darkL + (brightL - darkL) * 0.25;
+  const MIN_CROSS_GRAD = 4;   // 최소 교차 기울기 (노이즈 제외)
+  const SEARCH_WIN     = 8;   // 2단계 정밀 탐색 창 ±px (좁게 = 더 정확)
+
+  for (let ai = 0; ai < N_ANGLES; ai++) {
+    const theta = (ai / N_ANGLES) * 2 * Math.PI;
+    const cosT  = Math.cos(theta), sinT = Math.sin(theta);
+
+    let prevL     = Math.max(0, sampleL(pcx, pcy, STEP, cosT, sinT));
+    let coarseDist = -1; // 1단계 교차 위치 (-1 = 미감지)
+
+    // 1단계: 임계값 첫 교차 지점으로 경계 위치 대략 파악
+    for (let si = 2; si <= maxSteps; si++) {
+      const dist = si * STEP;
+      if (dist > MAX_R) break;
+      let L = sampleL(pcx, pcy, dist, cosT, sinT);
+      if (L < 0) break;
+      if (L > GLARE_THRESH) L = prevL; // 빛반사 억제
+      if (prevL < EDGE_THRESH && L >= EDGE_THRESH && (L - prevL) > MIN_CROSS_GRAD) {
+        coarseDist = dist;
+        break;
+      }
+      prevL = L;
+    }
+
+    if (coarseDist < 0) {
+      // 교차 미감지(빛반사 등) → 기준원으로 대체 (신뢰도=0으로 표시)
+      rawPoints[ai] = 0;
+      peakGrads[ai] = 0;
+      continue;
+    }
+
+    // 2단계: 교차 근방 ±SEARCH_WIN px 에서 기울기 무게중심 = 정확한 경계
+    const s0  = Math.max(2, Math.round((coarseDist - SEARCH_WIN) / STEP));
+    const s1  = Math.min(maxSteps, Math.round((coarseDist + SEARCH_WIN) / STEP));
+    let   pL2 = Math.max(0, sampleL(pcx, pcy, (s0 - 1) * STEP, cosT, sinT));
+    let   wSum = 0, wDist = 0, totalG = 0;
+
+    for (let si = s0; si <= s1; si++) {
+      const dist = si * STEP;
+      let L = sampleL(pcx, pcy, dist, cosT, sinT);
+      if (L < 0) break;
+      if (L > GLARE_THRESH) L = pL2;
+      const g = Math.max(0, L - pL2);
+      wSum  += g;
+      wDist += g * (dist - STEP * 0.5);
+      totalG = Math.max(totalG, g);
+      pL2 = L;
+    }
+
+    // 기울기 무게중심: peak 단일점보다 안정적인 경계 위치
+    rawPoints[ai] = wSum > 0 ? wDist / wSum : coarseDist;
+    peakGrads[ai] = totalG;
+  }
+
+  // 이상치 제거: 미감지(0) 또는 중앙값 ±13% 범위 밖 → 양옆 유효값으로 보간
+  const validRaws = Float32Array.from(rawPoints).filter(v => v > 0).sort();
+  const medR = validRaws.length ? validRaws[validRaws.length >> 1] : pr;
+  const OUTLIER_MIN = medR * 0.87;
+  const OUTLIER_MAX = medR * 1.13;
+
+  const valid = new Uint8Array(N_ANGLES);
+  for (let ai = 0; ai < N_ANGLES; ai++)
+    valid[ai] = (rawPoints[ai] > 0 && rawPoints[ai] >= OUTLIER_MIN && rawPoints[ai] <= OUTLIER_MAX) ? 1 : 0;
+
+  for (let ai = 0; ai < N_ANGLES; ai++) {
+    if (valid[ai]) continue;
+    let lo = -1, hi = -1;
+    for (let k = 1; k < N_ANGLES; k++) {
+      if (lo < 0 && valid[(ai - k + N_ANGLES) % N_ANGLES]) lo = (ai - k + N_ANGLES) % N_ANGLES;
+      if (hi < 0 && valid[(ai + k) % N_ANGLES])             hi = (ai + k) % N_ANGLES;
+      if (lo >= 0 && hi >= 0) break;
+    }
+    if (lo < 0 || hi < 0) continue;
+    const span = (hi - lo + N_ANGLES) % N_ANGLES || 1;
+    const t    = ((ai - lo + N_ANGLES) % N_ANGLES) / span;
+    rawPoints[ai] = rawPoints[lo] + (rawPoints[hi] - rawPoints[lo]) * t;
+  }
+
+  // ④ 5점 원형 스무딩 (미세 노이즈만 제거, 정밀도 최대 보존)
+  const points = new Float32Array(N_ANGLES);
+  const SW = 2; // ±2 = 5점 (≈ ±1°)
+  for (let ai = 0; ai < N_ANGLES; ai++) {
+    let s = 0;
+    for (let k = -SW; k <= SW; k++) s += rawPoints[(ai + k + N_ANGLES) % N_ANGLES];
+    points[ai] = s / (2 * SW + 1);
+  }
+
+  // ④-b 이진 신뢰도: 감지 성공 → 검출값 100% 사용, 미감지 → 기준원으로 대체
+  let sumR0 = 0;
+  for (let ai = 0; ai < N_ANGLES; ai++) sumR0 += points[ai];
+  const rawAvgR = sumR0 / N_ANGLES;
+
+  for (let ai = 0; ai < N_ANGLES; ai++) {
+    // peakGrads=0 → 빛반사/경계불명 → 기준원 위치로 스냅
+    // peakGrads>0 → 경계 감지 성공 → 검출값 그대로 유지
+    const conf = peakGrads[ai] > 0 ? 1.0 : 0.0;
+    points[ai] = points[ai] * conf + rawAvgR * (1 - conf);
+  }
+
+  // ⑤ 편차 통계 계산
+  let sumR = 0;
+  for (let ai = 0; ai < N_ANGLES; ai++) sumR += points[ai];
+  const avgR = sumR / N_ANGLES;
+
+  const deviations = new Float32Array(N_ANGLES);
+  let sumSq = 0, maxDev = 0, maxDevAngle = 0;
+  let minR = Infinity, maxR = -Infinity;
+  for (let ai = 0; ai < N_ANGLES; ai++) {
+    deviations[ai] = points[ai] - avgR;
+    sumSq += deviations[ai] ** 2;
+    if (Math.abs(deviations[ai]) > maxDev) { maxDev = Math.abs(deviations[ai]); maxDevAngle = ai; }
+    if (points[ai] < minR) minR = points[ai];
+    if (points[ai] > maxR) maxR = points[ai];
+  }
+  const rmsDeviation = Math.sqrt(sumSq / N_ANGLES);
+
+  pupilShape = { points, deviations, N: N_ANGLES, avgR, rmsDeviation, maxDev, maxDevAngle, minR, maxR };
+  showPupilShape = true;
+
+  if (btn) {
+    btn.classList.add('active-dot-btn');
+    btn.innerHTML = '<i class="bi bi-circle-fill"></i> 동공 끄기';
+  }
+  _drawIrisColorMap();
+  render();
+
+  const circularity = (minR / maxR * 100).toFixed(1);
+  const maxDevPct   = (maxDev / avgR * 100).toFixed(1);
+  const clockH      = Math.round(maxDevAngle / 60) % 12 || 12; // 720방향: 1시간=60스텝
+  toast(`동공 윤곽 — 진원도 ${circularity}% · RMS편차 ${rmsDeviation.toFixed(1)}px · 최대편차 ${maxDevPct}% (${clockH}시 방향)`, 'success', 6000);
+}
+
+function detectCollarette() {
+  const btn = document.getElementById('collRingBtn');
+
+  if (showCollRing) {
+    showCollRing = false; collRing = null;
+    if (btn) { btn.classList.remove('active-dot-btn'); btn.innerHTML = '<i class="bi bi-record-circle"></i> 신경환'; }
+    _drawIrisColorMap();
+    return;
+  }
+
+  if (!irisRawCache) { toast('먼저 색상 분석을 실행하세요.', 'error'); return; }
+  const { ofc, iw, ih, icx, icy, ir, pr } = irisRawCache;
+  const d = ofc.getContext('2d').getImageData(0, 0, iw, ih).data;
+
+  const N_ANGLES = 360;
+  const N_STEPS  = 120;         // 동공→홍채 외경 샘플 수
+  const FROM = 0.10, TO = 0.65; // 탐색 반경 범위
+  const rawRadii = new Float32Array(N_ANGLES);
+
+  for (let ai = 0; ai < N_ANGLES; ai++) {
+    const theta = (ai / N_ANGLES) * 2 * Math.PI;
+    const cosT = Math.cos(theta), sinT = Math.sin(theta);
+
+    // 반경 방향 밝기 프로파일 샘플링
+    const prof = new Float32Array(N_STEPS);
+    for (let si = 0; si < N_STEPS; si++) {
+      const frac = si / (N_STEPS - 1);
+      const dist = pr + frac * (ir - pr);
+      const px = Math.round(icx + dist * cosT);
+      const py = Math.round(icy + dist * sinT);
+      if (px >= 0 && px < iw && py >= 0 && py < ih) {
+        const idx = (py * iw + px) * 4;
+        prof[si] = 0.299*d[idx] + 0.587*d[idx+1] + 0.114*d[idx+2];
+      }
+    }
+
+    // 5점 이동평균 스무딩
+    const sm = new Float32Array(N_STEPS);
+    for (let si = 0; si < N_STEPS; si++) {
+      let s = 0, n = 0;
+      for (let k = -2; k <= 2; k++) {
+        const j = si + k;
+        if (j >= 0 && j < N_STEPS) { s += prof[j]; n++; }
+      }
+      sm[si] = n ? s/n : 0;
+    }
+
+    // 탐색 구간 내 최대 밝기 기울기 위치 → 섬유 끝점
+    const lo = Math.floor(FROM * N_STEPS);
+    const hi = Math.floor(TO   * N_STEPS);
+    let peakG = -1, peakSi = Math.round((lo+hi)/2);
+    for (let si = lo+1; si <= hi; si++) {
+      const g = Math.abs(sm[si] - sm[si-1]);
+      if (g > peakG) { peakG = g; peakSi = si; }
+    }
+    rawRadii[ai] = peakSi / (N_STEPS - 1);
+  }
+
+  // 11점 원형 이동평균 스무딩 (불규칙성 유지하면서 노이즈 제거)
+  const radii = new Float32Array(N_ANGLES);
+  const SW = 11, SH = Math.floor(SW/2);
+  for (let ai = 0; ai < N_ANGLES; ai++) {
+    let s = 0;
+    for (let k = -SH; k <= SH; k++) s += rawRadii[(ai+k+N_ANGLES) % N_ANGLES];
+    radii[ai] = s / SW;
+  }
+
+  const avgR = radii.reduce((a,v)=>a+v,0) / N_ANGLES;
+  const minR = Math.min(...radii), maxR = Math.max(...radii);
+
+  collRing = { radii, N: N_ANGLES, avgR };
+  showCollRing = true;
+
+  if (btn) {
+    btn.classList.add('active-dot-btn');
+    btn.innerHTML = '<i class="bi bi-record-circle-fill"></i> 신경환 끄기';
+  }
+  _drawIrisColorMap();
+  toast(`자율신경환 감지 — 평균 ${(avgR*100).toFixed(0)}%, 범위 ${(minR*100).toFixed(0)}–${(maxR*100).toFixed(0)}%`, 'success', 5000);
+}
+
+function _hex(r, g, b) {
+  return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+}
+
+function _rgbToHsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r,g,b), min = Math.min(r,g,b), d = max - min;
+  let h = 0;
+  if (d) {
+    if      (max===r) h = ((g-b)/d+6)%6;
+    else if (max===g) h = (b-r)/d+2;
+    else              h = (r-g)/d+4;
+    h = Math.round(h*60);
+  }
+  return [h, max ? d/max : 0, max];
+}
+
+function toggleColorDots() {
+  showColorDots = !showColorDots;
+  const btn = document.getElementById('dotToggleBtn');
+  if (btn) {
+    btn.classList.toggle('active-dot-btn', showColorDots);
+    btn.innerHTML = showColorDots
+      ? '<i class="bi bi-grid-3x3-gap-fill"></i> 점 숨기기'
+      : '<i class="bi bi-grid-3x3"></i> 점 보이기';
+  }
+  render();
+}
+
+function toggleColorFill() {
+  showColorFill = !showColorFill;
+  const btn = document.getElementById('colorFillBtn');
+  if (btn) {
+    btn.classList.toggle('active-dot-btn', showColorFill);
+    btn.innerHTML = showColorFill
+      ? '<i class="bi bi-palette-fill"></i> 색상 끄기'
+      : '<i class="bi bi-palette"></i> 색상 보이기';
+  }
+  render();
+}
+
+function exportColorJSON() {
+  if (!colorSamples?.length) { toast('먼저 색상 분석을 실행해 주세요.', 'error'); return; }
+  const measure = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+  const data = {
+    image_id: IMAGE_ID,
+    sample_count: colorSamples.length,
+    geometry: measure?.geometry,
+    samples: colorSamples.map(({ nx, ny, r, g, b, angle, radial }) => ({
+      nx: +nx.toFixed(4), ny: +ny.toFixed(4),
+      r, g, b,
+      hex: _hex(r,g,b),
+      angle: +angle.toFixed(1),
+      radial: +radial.toFixed(3),
+    })),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `iris_color_${IMAGE_ID}.json`; a.click();
+  toast('JSON 저장 완료', 'success');
+}
+
+// ── 색상 점 오버레이 렌더 (render()에서 호출) ──────────────────────────────────
+// 캔버스 해상도로 홍채 환형 픽셀을 ImageData에 복사
+function _buildIrisOverlay() {
+  if (!irisRawCache) return;
+  const { ofc, iw, ih, icx, icy, ir, pcx, pcy, pr } = irisRawCache;
+  const W = canvas.width, H = canvas.height;
+  const d  = ofc.getContext('2d').getImageData(0, 0, iw, ih).data;
+  const ov = new ImageData(W, H);
+  const od = ov.data;
+  const ir2 = ir*ir, pr2 = pr*pr;
+  const sx = iw/W, sy = ih/H;
+  const bx1 = Math.max(0, Math.floor((icx-ir)/sx));
+  const bx2 = Math.min(W-1, Math.ceil((icx+ir)/sx));
+  const by1 = Math.max(0, Math.floor((icy-ir)/sy));
+  const by2 = Math.min(H-1, Math.ceil((icy+ir)/sy));
+  for (let cy = by1; cy <= by2; cy++) {
+    for (let cx = bx1; cx <= bx2; cx++) {
+      const ix = Math.round(cx*sx), iy = Math.round(cy*sy);
+      const dIx = ix-icx, dIy = iy-icy;
+      const dPx = ix-pcx, dPy = iy-pcy;
+      if (dIx*dIx+dIy*dIy > ir2 || dPx*dPx+dPy*dPy < pr2) continue;
+      const si = (iy*iw+ix)*4, di = (cy*W+cx)*4;
+      od[di]=d[si]; od[di+1]=d[si+1]; od[di+2]=d[si+2]; od[di+3]=255;
+    }
+  }
+  irisOverlayData = ov;
+}
+
+function drawColorDots() {
+  if (!showColorDots) return;
+  const measure = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+  if (!measure) return;
+  const g = measure.geometry;
+
+  if (showColorFill) {
+    // ── 색상 모드: 원본 픽셀을 1:1로 복사 ──────────────────────────────────
+    if (!irisOverlayData && irisRawCache) _buildIrisOverlay();
+    if (irisOverlayData) ctx.putImageData(irisOverlayData, 0, 0);
+  } else {
+    // ── 위치 모드: 홍채 환형을 흰 점 격자로 촘촘하게 채움 ───────────────────
+    const [icxPx, icyPx] = toPx(g.iris.center[0],  g.iris.center[1]);
+    const [pcxPx, pcyPx] = toPx(g.pupil.center[0], g.pupil.center[1]);
+    const irPx = g.iris.radius  * canvas.width;
+    const prPx = g.pupil.radius * canvas.width;
+    const ir2  = irPx * irPx, pr2 = prPx * prPx;
+    const SPACING = 3;   // 점 간격 (px)
+    const DOT_R   = 1.3; // 점 반지름 (px)
+    const bx1 = Math.max(0, Math.floor(icxPx - irPx));
+    const bx2 = Math.min(canvas.width,  Math.ceil(icxPx + irPx));
+    const by1 = Math.max(0, Math.floor(icyPx - irPx));
+    const by2 = Math.min(canvas.height, Math.ceil(icyPx + irPx));
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    for (let cy = by1; cy <= by2; cy += SPACING) {
+      for (let cx = bx1; cx <= bx2; cx += SPACING) {
+        const dI2 = (cx-icxPx)**2 + (cy-icyPx)**2;
+        const dP2 = (cx-pcxPx)**2 + (cy-pcyPx)**2;
+        if (dI2 > ir2 || dP2 < pr2) continue;
+        ctx.moveTo(cx + DOT_R, cy);
+        ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
+      }
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ── 라벨 목록 DOM 추가 ─────────────────────────────────────────────────────────
+const GEOM_ICONS = {
+  point:       'bi-record-circle-fill',
+  polyline:    'bi-bezier',
+  polygon:     'bi-pentagon-fill',
+  circle:      'bi-circle-fill',
+  iris_measure:'bi-record2-fill',
+};
+function appendLabelToList(l) {
+  const list = document.getElementById('labelList');
+  list.querySelector('#emptyMsg')?.remove();
+
+  const gt       = l.geometry?.type;
+  const icon     = GEOM_ICONS[gt] || 'bi-tag';
+  const ratioBadge = gt === 'iris_measure'
+    ? `<span class="ratio-badge">비율 ${(l.geometry.ratio * 100).toFixed(1)}%</span>`
+    : '';
+
+  const displayColor = l.category_color || (gt === 'iris_measure' ? '#2563EB' : '#6B7280');
+  const displayName  = l.category_name  || (gt === 'iris_measure' ? '홍채/동공 측정' : '(카테고리 없음)');
+
+  const item = document.createElement('div');
+  item.className = 'label-item';
+  item.id = `label-${l.id}`;
+  item.innerHTML = `
+    <div class="d-flex align-items-start gap-2">
+      <div class="geom-icon" style="color:${displayColor}">
+        <i class="bi ${icon}"></i>
+      </div>
+      <div class="flex-grow-1">
+        <div class="fw-semibold" style="font-size:0.85rem">${esc(displayName)}</div>
+        <div class="d-flex gap-2 flex-wrap mt-1">
+          <span class="severity-badge sev-${l.severity}">심각도 ${l.severity}</span>
+          ${ratioBadge}
+          ${l.notes ? `<span class="text-muted" style="font-size:0.72rem">${esc(l.notes)}</span>` : ''}
+        </div>
+      </div>
+      <div class="d-flex gap-1 flex-shrink-0">
+        <button class="btn btn-sm btn-outline-light py-0 px-1" onclick="flashAnnotation(${l.id})" title="위치 표시">
+          <i class="bi bi-eye" style="font-size:11px"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="deleteLabel(${l.id})">
+          <i class="bi bi-trash" style="font-size:11px"></i>
+        </button>
+      </div>
+    </div>`;
+  list.appendChild(item);
+}
+
+function updateBadge() {
+  document.getElementById('labelBadge').textContent =
+    document.querySelectorAll('.label-item').length;
+}
+
+// ── 렌더링 ────────────────────────────────────────────────────────────────────
+function toggleIrisMeasure() {
+  showIrisMeasure = !showIrisMeasure;
+  const btn = document.getElementById('irisMeasureToggleBtn');
+  if (btn) {
+    btn.innerHTML = showIrisMeasure
+      ? '<i class="bi bi-record2-fill me-1"></i>원 숨기기'
+      : '<i class="bi bi-record2 me-1"></i>원 보이기';
+    btn.classList.toggle('btn-outline-secondary',  showIrisMeasure);
+    btn.classList.toggle('btn-secondary',          !showIrisMeasure);
+  }
+  render();
+}
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawColorDots();   // 색상 점 오버레이 (iris_measure 아래 레이어)
+  S.annotations.forEach(ann => drawAnnotation(ann, ann.id === S.flashId));
+  drawInProgress();
+  drawPupilShapeOverlay();
+  drawEyelidOverlay();
+}
+
+function drawEyelidOverlay() {
+  if (!showEyelidMask || !irisRawCache) return;
+
+  const cw = canvas.width, ch = canvas.height;
+
+  // ① 라벨 좌표가 있으면 실제 폴리곤을 직접 그리기
+  if (eyelidPolygons && eyelidPolygons.length > 0) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(40,40,40,0.50)';
+    for (const lbl of eyelidPolygons) {
+      const coords = lbl.coords;
+      if (!coords || coords.length < 2) continue;
+      const firstX = coords[0][0] * cw;
+      const lastX  = coords[coords.length - 1][0] * cw;
+      ctx.beginPath();
+      ctx.moveTo(firstX, coords[0][1] * ch);
+      for (let i = 1; i < coords.length; i++) {
+        ctx.lineTo(coords[i][0] * cw, coords[i][1] * ch);
+      }
+      // 끝점 x에서 수직으로 가장자리 → 가장자리 따라 시작점 x로 이동
+      if (lbl.is_upper) {
+        ctx.lineTo(lastX,  0);
+        ctx.lineTo(firstX, 0);
+      } else {
+        ctx.lineTo(lastX,  ch);
+        ctx.lineTo(firstX, ch);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+    return;
+  }
+
+  // ② AI/규칙 기반 마스크 폴백 — 각도 기반 부채꼴 그리기
+  if (!eyelidMask) return;
+  const measure = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+  if (!measure) return;
+
+  const g    = measure.geometry;
+  const icxC = g.iris.center[0]  * cw, icyC = g.iris.center[1]  * ch;
+  const irC  = g.iris.radius     * cw;
+  const prC  = g.pupil.radius    * cw;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(60,60,60,0.45)';
+  const N = 360;
+  let ai = 0;
+  while (ai < N) {
+    if (!eyelidMask[ai]) { ai++; continue; }
+    let aj = ai;
+    while (aj < N && eyelidMask[aj]) aj++;
+    const a1 = (ai / N) * 2 * Math.PI;
+    const a2 = (aj / N) * 2 * Math.PI;
+    ctx.beginPath();
+    ctx.arc(icxC, icyC, irC, a1, a2);
+    ctx.arc(icxC, icyC, prC, a2, a1, true);
+    ctx.closePath();
+    ctx.fill();
+    ai = aj;
+  }
+  ctx.restore();
+}
+
+function drawPupilShapeOverlay() {
+  if (!showPupilShape || !pupilShape?.points || !irisRawCache) return;
+  const measure = S.annotations.find(a => a.geometry?.type === 'iris_measure');
+  if (!measure) return;
+  const g = measure.geometry;
+  const [pcxC, pcyC] = toPx(g.pupil.center[0], g.pupil.center[1]);
+  const irPx = g.iris.radius * canvas.width;
+  const { ir } = irisRawCache;
+  const { points, N: NP, avgR, maxDevAngle, deviations } = pupilShape;
+  const toC = r => r * irPx / ir; // orig px → canvas px
+
+  // 기준원 (파란 파선)
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(pcxC, pcyC, toC(avgR), 0, Math.PI*2);
+  ctx.strokeStyle = '#88AAFF';
+  ctx.lineWidth   = 1.5;
+  ctx.globalAlpha = 0.8;
+  ctx.setLineDash([5, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // 실제 윤곽 (분홍 파선)
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i <= NP; i++) {
+    const theta = ((i % NP) / NP) * 2 * Math.PI;
+    const rC = toC(points[i % NP]);
+    const px = pcxC + rC * Math.cos(theta);
+    const py = pcyC + rC * Math.sin(theta);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = '#FF2D78';
+  ctx.lineWidth   = 2;
+  ctx.globalAlpha = 0.85;
+  ctx.setLineDash([4, 2]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 최대 편차 방향 (노란선)
+  const thetaMax = (maxDevAngle / NP) * 2 * Math.PI;
+  const AMPL = 5;
+  const r1c = toC(avgR);
+  const r2c = toC(avgR + deviations[maxDevAngle] * AMPL);
+  ctx.beginPath();
+  ctx.moveTo(pcxC + r1c*Math.cos(thetaMax), pcyC + r1c*Math.sin(thetaMax));
+  ctx.lineTo(pcxC + r2c*Math.cos(thetaMax), pcyC + r2c*Math.sin(thetaMax));
+  ctx.strokeStyle = '#FFD700';
+  ctx.lineWidth   = 2.5;
+  ctx.globalAlpha = 0.95;
+  ctx.setLineDash([]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawAnnotation(ann, flash) {
+  if (!ann.geometry) return;
+  const { type } = ann.geometry;
+  ctx.save();
+  if (flash) { ctx.shadowColor = ann.category_color || '#2563EB'; ctx.shadowBlur = 18; }
+
+  switch (type) {
+    case 'point':       drawPoint(ann, flash);       break;
+    case 'polyline':    drawPolyline(ann, flash);    break;
+    case 'polygon':     drawPolygon(ann, flash);     break;
+    case 'circle':      drawCircle(ann, flash);      break;
+    case 'iris_measure': if (showIrisMeasure) drawIrisMeasure(ann, flash); break;
+  }
+  ctx.restore();
+}
+
+function drawPoint(ann, flash) {
+  const [x, y]  = toPx(...ann.geometry.coords[0]);
+  const color   = ann.category_color || '#2563EB';
+  const r       = flash ? 10 : 6;
+
+  ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+  ctx.fillStyle = color + '28'; ctx.fill();
+
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color; ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  const name = ann.category_name?.slice(0, 7) || '';
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeText(name, x, y + r + 12);
+  ctx.fillStyle = color; ctx.fillText(name, x, y + r + 12);
+}
+
+function drawPolyline(ann, flash) {
+  const pts   = ann.geometry.coords.map(c => toPx(...c));
+  const color = ann.category_color || '#2563EB';
+  if (pts.length < 2) { ctx.beginPath(); ctx.arc(...pts[0], 5, 0, Math.PI*2); ctx.fillStyle=color; ctx.fill(); return; }
+
+  ctx.beginPath(); ctx.moveTo(...pts[0]);
+  pts.slice(1).forEach(p => ctx.lineTo(...p));
+  ctx.strokeStyle = color; ctx.lineWidth = flash ? 3 : 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
+  pts.forEach(([x,y]) => {
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+  });
+}
+
+function drawPolygon(ann, flash) {
+  const pts   = ann.geometry.coords.map(c => toPx(...c));
+  const color = ann.category_color || '#2563EB';
+  if (pts.length < 3) return;
+
+  ctx.beginPath(); ctx.moveTo(...pts[0]);
+  pts.slice(1).forEach(p => ctx.lineTo(...p)); ctx.closePath();
+  ctx.fillStyle = color + (flash ? '45' : '28'); ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = flash ? 3 : 2; ctx.lineJoin = 'round'; ctx.stroke();
+  pts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fillStyle=color; ctx.fill(); });
+}
+
+function drawCircle(ann, flash) {
+  const { center, radius } = ann.geometry;
+  const [cx, cy] = toPx(...center);
+  const rPx      = radius * canvas.width;
+  const color    = ann.category_color || '#2563EB';
+
+  ctx.beginPath(); ctx.arc(cx, cy, rPx, 0, Math.PI * 2);
+  ctx.strokeStyle = color; ctx.lineWidth = flash ? 3 : 2; ctx.stroke();
+  ctx.fillStyle = color + (flash ? '35' : '18'); ctx.fill();
+
+  // 중심 십자
+  ctx.beginPath();
+  ctx.moveTo(cx-7,cy); ctx.lineTo(cx+7,cy);
+  ctx.moveTo(cx,cy-7); ctx.lineTo(cx,cy+7);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // 라벨
+  const name = ann.category_name?.slice(0, 7) || '';
+  ctx.shadowBlur = 0; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeText(name, cx, cy - rPx - 6);
+  ctx.fillStyle = color; ctx.fillText(name, cx, cy - rPx - 6);
+}
+
+function drawIrisMeasure(ann, flash) {
+  const { pupil, iris, ratio } = ann.geometry;
+
+  const [icx, icy] = toPx(...iris.center);
+  const ir         = iris.radius * canvas.width;
+  const [pcx, pcy] = toPx(...pupil.center);
+  const pr         = pupil.radius * canvas.width;
+
+  // ── 조정 핸들 표시 여부 (마우스가 원 근처에 있을 때) ──
+  const mp = S.mousePos;
+  const isHovering = mp && (
+    Math.abs(Math.hypot(mp[0]-icx, mp[1]-icy) - ir) < ADJ_TOL * 2 ||
+    Math.abs(Math.hypot(mp[0]-pcx, mp[1]-pcy) - pr) < ADJ_TOL * 2 ||
+    Math.hypot(mp[0]-pcx, mp[1]-pcy) < pr ||
+    (Math.hypot(mp[0]-icx, mp[1]-icy) < ir && Math.hypot(mp[0]-pcx, mp[1]-pcy) > pr)
+  );
+  const isAdjusting = activeAdj?.ann?.id === ann.id;
+  const showHandles = flash || isHovering || isAdjusting;
+  const lw = showHandles ? 3 : 2;
+
+  // 홍채 외경 (파란색)
+  ctx.beginPath(); ctx.arc(icx, icy, ir, 0, Math.PI * 2);
+  ctx.strokeStyle = '#2563EB'; ctx.lineWidth = lw; ctx.stroke();
+  ctx.fillStyle   = showHandles ? 'rgba(37,99,235,0.12)' : 'rgba(37,99,235,0.06)'; ctx.fill();
+
+  // 동공 (진파란색)
+  ctx.beginPath(); ctx.arc(pcx, pcy, pr, 0, Math.PI * 2);
+  ctx.strokeStyle = '#1E3A8A'; ctx.lineWidth = lw; ctx.stroke();
+  ctx.fillStyle   = showHandles ? 'rgba(30,58,138,0.25)' : 'rgba(30,58,138,0.15)'; ctx.fill();
+
+  // 중심점
+  ctx.beginPath(); ctx.arc(pcx, pcy, showHandles ? 5 : 3, 0, Math.PI*2);
+  ctx.fillStyle = '#1E3A8A'; ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // 드래그 핸들 — 사각형으로 점 라벨과 구분
+  if (showHandles) {
+    [[icx,icy,ir,'#2563EB'],[pcx,pcy,pr,'#1E3A8A']].forEach(([cx,cy,r,col]) => {
+      [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy]) => {
+        const hx = cx + dx*r, hy = cy + dy*r;
+        const s = 5; // 핸들 반크기
+        ctx.save();
+        ctx.translate(hx, hy);
+        ctx.beginPath();
+        ctx.rect(-s, -s, s*2, s*2);
+        ctx.fillStyle = '#fff'; ctx.fill();
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+        ctx.restore();
+      });
+    });
+  }
+
+  // 비율 텍스트
+  const pct = ((ratio ?? 0) * 100).toFixed(1);
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 4;
+  ctx.strokeText(`동공/홍채 ${pct}%`, icx, icy - ir - 10);
+  ctx.fillStyle = '#1E3A8A';
+  ctx.fillText(`동공/홍채 ${pct}%`, icx, icy - ir - 10);
+
+  // 직경 가이드
+  if (showHandles) {
+    [[icx,icy,ir,'#2563EB'],[pcx,pcy,pr,'#1E3A8A']].forEach(([cx,cy,r,col]) => {
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy + r + 8); ctx.lineTo(cx + r, cy + r + 8);
+      ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash([3,3]); ctx.stroke();
+      ctx.setLineDash([]);
+      // 직경 수치
+      const d = (r * 2 / canvas.width * 100).toFixed(1);
+      ctx.font = '9px system-ui'; ctx.textAlign = 'center';
+      ctx.fillStyle = col; ctx.fillText(`Ø ${d}%`, cx, cy + r + 20);
+    });
+  }
+}
+
+// ── 드로잉 중 미리보기 ─────────────────────────────────────────────────────────
+function drawInProgress() {
+  const mPos = S.mousePos;
+
+  // ① 원형 / 홍채비율 드래그 미리보기
+  if (S.isDragging && S.circleCenter && mPos) {
+    const [cx, cy] = toPx(...S.circleCenter);
+    const rPx      = Math.hypot(mPos[0]-cx, mPos[1]-cy);
+    const color    = S.tool === 'iris_ratio'
+      ? (S.irisStep === 0 ? '#1E3A8A' : '#2563EB')
+      : getCurrentColor();
+
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, rPx, 0, Math.PI*2);
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([5,3]); ctx.stroke();
+    ctx.fillStyle = color + '12'; ctx.fill();
+    ctx.setLineDash([]);
+
+    // 반지름 선
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(mPos[0],mPos[1]);
+    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.stroke();
+
+    // 직경 표시
+    const diamPct = (rPx * 2 / canvas.width * 100).toFixed(1);
+    const label   = S.tool === 'iris_ratio'
+      ? (S.irisStep === 0 ? `동공 Ø ${diamPct}%` : `홍채 Ø ${diamPct}%`)
+      : `Ø ${diamPct}%`;
+    ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center';
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.strokeText(label, cx, cy - rPx - 8);
+    ctx.fillStyle = color; ctx.fillText(label, cx, cy - rPx - 8);
+    ctx.restore();
+  }
+
+  // ② 홍채비율 단계2: 기존 동공 미리 표시
+  if (S.tool === 'iris_ratio' && S.irisStep === 1 && S.pupilData) {
+    const [cx, cy] = toPx(...S.pupilData.center);
+    const rPx      = S.pupilData.radius * canvas.width;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, rPx, 0, Math.PI*2);
+    ctx.strokeStyle = '#1E3A8A'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = 'rgba(30,58,138,0.2)'; ctx.fill();
+    ctx.restore();
+  }
+
+  // ③ 베지어 펜툴 미리보기 (Catmull-Rom — 클릭 점을 지나는 자동 부드러운 곡선)
+  if (S.tool === 'bezier' && BZ.anchors.length > 0) {
+    const color = getCurrentColor();
+    const anc   = BZ.anchors;
+    const mp    = BZ.mousePos;
+
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+
+    // 확정된 Catmull-Rom 경로 (실선)
+    if (anc.length >= 2) _drawCatmullRom(ctx, anc, false);
+
+    // 마지막 앵커 → 마우스: 파선 미리보기
+    if (mp) {
+      const last = anc[anc.length - 1];
+      ctx.beginPath();
+      ctx.setLineDash([5, 3]);
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(mp.x, mp.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // 앵커 점 그리기
+    anc.forEach((a, i) => {
+      ctx.beginPath(); ctx.arc(a.x, a.y, i === 0 ? 7 : 4, 0, Math.PI*2);
+      ctx.fillStyle   = i === 0 ? '#EF4444' : color;
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      ctx.fill(); ctx.stroke();
+    });
+
+    ctx.restore();
+    return;
+  }
+
+  // ④ 선/다각형 드로잉 미리보기
+  if (!S.drawing || !S.inProgress.length) return;
+  const pts   = S.inProgress.map(c => toPx(...c));
+  const color = getCurrentColor();
+
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.setLineDash([6,3]); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+
+  if (S.tool === 'polyline') {
+    ctx.beginPath(); ctx.moveTo(...pts[0]);
+    pts.slice(1).forEach(p => ctx.lineTo(...p));
+    if (mPos) ctx.lineTo(...mPos);
+    ctx.stroke();
+  } else if (S.tool === 'polygon') {
+    ctx.beginPath(); ctx.moveTo(...pts[0]);
+    pts.slice(1).forEach(p => ctx.lineTo(...p));
+    if (mPos) ctx.lineTo(...mPos);
+    ctx.closePath();
+    ctx.fillStyle = color + '15'; ctx.fill(); ctx.stroke();
+    // 시작점 닫기 표시
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(...pts[0], 8, 0, Math.PI*2);
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  pts.forEach(([x,y]) => {
+    ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  });
+  ctx.restore();
+}
+
+// ── 이미지 메타 ───────────────────────────────────────────────────────────────
+async function saveImageMeta() {
+  try {
+    await api.put(`/api/images/${IMAGE_ID}`, {
+      eye_side:   document.getElementById('editEyeSide').value,
+      subject_id: document.getElementById('editSubjectId').value,
+      notes:      document.getElementById('editNotes').value,
+    });
+    toast('이미지 정보 저장됨', 'success');
+  } catch(e) { toast('저장 실패: ' + e.message, 'error'); }
+}
+
+// ── 초기화 ────────────────────────────────────────────────────────────────────
+S.annotations = INITIAL_LABELS
+  .filter(l => l.geometry)
+  .map(l => ({ id:l.id, geometry:l.geometry, category_color:l.category_color, category_name:l.category_name, severity:l.severity, notes:l.notes }));
+
+document.getElementById('toolHint').textContent = HINTS['point'];
+updateRatioPanel();
+</script>
+{% endblock %}

@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}갤러리 - 홍채 AI 분석{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-images me-2 icon-glow-cyan"></i>이미지 갤러리</h4>
+  <a href="/upload" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg me-1"></i>업로드</a>
+</div>
+
+<!-- 필터 -->
+<div class="card mb-3">
+  <div class="card-body py-2 px-3 d-flex flex-wrap gap-2 align-items-center">
+    <span class="text-muted me-1" style="font-size:0.78rem">필터:</span>
+    <button class="btn btn-sm btn-outline-light filter-btn active" data-filter="">전체</button>
+    <button class="btn btn-sm btn-outline-success filter-btn" data-filter="labeled_only=true">
+      <i class="bi bi-check2 me-1"></i>라벨링 완료
+    </button>
+    <button class="btn btn-sm btn-outline-warning filter-btn" data-filter="unlabeled_only=true">
+      <i class="bi bi-circle me-1"></i>미라벨
+    </button>
+    <button class="btn btn-sm btn-outline-info filter-btn" data-filter="eye_side=left">좌안</button>
+    <button class="btn btn-sm btn-outline-info filter-btn" data-filter="eye_side=right">우안</button>
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <span id="totalCount" class="text-muted" style="font-size:0.78rem"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Gallery Grid -->
+<div id="gallery" class="row g-3"></div>
+
+<!-- Pagination -->
+<div id="pagination" class="d-flex justify-content-center mt-4 gap-1 flex-wrap"></div>
+
+<!-- Delete Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="bi bi-trash me-2 text-danger"></i>이미지 삭제</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body small text-sub">
+        삭제하면 라벨 데이터도 함께 삭제됩니다. 계속하시겠습니까?
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm btn-outline-light" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-sm btn-danger" id="confirmDelete">
+          <i class="bi bi-trash me-1"></i>삭제
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentFilter = '';
+let currentPage = 1;
+let totalPages = 1;
+let deleteTargetId = null;
+const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    currentPage = 1;
+    loadGallery();
+  });
+});
+
+function renderSkeleton() {
+  const gallery = document.getElementById('gallery');
+  gallery.innerHTML = Array.from({ length: 12 }, () => `
+    <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+      <div class="skeleton" style="aspect-ratio:1;border-radius:10px;margin-bottom:6px"></div>
+      <div class="skeleton" style="height:12px;border-radius:4px;margin-bottom:4px"></div>
+      <div class="skeleton" style="height:12px;border-radius:4px;width:60%"></div>
+    </div>
+  `).join('');
+}
+
+async function loadGallery() {
+  renderSkeleton();
+  try {
+    const params = new URLSearchParams(currentFilter);
+    params.set('page', currentPage);
+    params.set('per_page', 24);
+    const data = await api.get('/api/images?' + params.toString());
+
+    totalPages = data.pages;
+    document.getElementById('totalCount').textContent = `총 ${data.total}개`;
+    const gallery = document.getElementById('gallery');
+
+    if (!data.images.length) {
+      gallery.innerHTML = `
+        <div class="col-12 text-center py-5">
+          <i class="bi bi-images display-4 d-block mb-3 text-muted"></i>
+          <p class="text-muted mb-3">이미지가 없습니다.</p>
+          <a href="/upload" class="btn btn-sm btn-primary">업로드하기</a>
+        </div>`;
+      document.getElementById('pagination').innerHTML = '';
+      return;
+    }
+
+    gallery.innerHTML = data.images.map(img => `
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <div class="gallery-card">
+          <div class="gallery-img-wrap">
+            <img src="/uploads/${img.filename}" alt="${esc(img.original_filename)}" loading="lazy">
+            <div class="gallery-overlay">
+              <a href="/label/${img.id}" class="btn btn-sm btn-light" title="라벨링"><i class="bi bi-tag"></i></a>
+              <a href="/analyze/${img.id}" class="btn btn-sm btn-light" title="AI 분석"><i class="bi bi-cpu"></i></a>
+              <button class="btn btn-sm btn-danger" onclick="confirmDelete(${img.id})" title="삭제"><i class="bi bi-trash"></i></button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="small text-truncate" style="color:var(--text-sub)" title="${esc(img.original_filename)}">${esc(img.original_filename)}</div>
+            <div class="d-flex gap-1 mt-1 flex-wrap">
+              ${img.eye_side && img.eye_side !== 'unknown' ? `<span class="badge bg-info">${img.eye_side === 'left' ? '좌안' : '우안'}</span>` : ''}
+              ${img.subject_id ? `<span class="badge bg-secondary">${esc(img.subject_id)}</span>` : ''}
+              <span class="badge ${img.label_count > 0 ? 'bg-success' : 'bg-secondary'}">${img.label_count > 0 ? img.label_count + '개 라벨' : '미라벨'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `).join('');
+
+    renderPagination(data.pages);
+  } catch (e) {
+    toast('갤러리 로드 실패: ' + e.message, 'error');
+  }
+}
+
+function renderPagination(pages) {
+  const pag = document.getElementById('pagination');
+  if (pages <= 1) { pag.innerHTML = ''; return; }
+
+  const buttons = [];
+  buttons.push(`<button class="page-btn" onclick="goPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}><i class="bi bi-chevron-left"></i></button>`);
+
+  const range = [];
+  for (let i = 1; i <= pages; i++) {
+    if (i === 1 || i === pages || Math.abs(i - currentPage) <= 2) range.push(i);
+    else if (range[range.length - 1] !== '…') range.push('…');
+  }
+  range.forEach(p => {
+    if (p === '…') buttons.push(`<button class="page-btn" disabled>…</button>`);
+    else buttons.push(`<button class="page-btn ${p === currentPage ? 'active' : ''}" onclick="goPage(${p})">${p}</button>`);
+  });
+  buttons.push(`<button class="page-btn" onclick="goPage(${currentPage + 1})" ${currentPage === pages ? 'disabled' : ''}><i class="bi bi-chevron-right"></i></button>`);
+  pag.innerHTML = buttons.join('');
+}
+
+function goPage(p) {
+  if (p < 1 || p > totalPages) return;
+  currentPage = p;
+  loadGallery();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function confirmDelete(id) {
+  deleteTargetId = id;
+  deleteModal.show();
+}
+
+document.getElementById('confirmDelete').addEventListener('click', async () => {
+  if (!deleteTargetId) return;
+  try {
+    await api.del(`/api/images/${deleteTargetId}`);
+    deleteModal.hide();
+    toast('이미지가 삭제되었습니다.', 'success');
+    loadGallery();
+  } catch (e) {
+    toast('삭제 실패: ' + e.message, 'error');
+  }
+});
+
+loadGallery();
+</script>
+{% endblock %}

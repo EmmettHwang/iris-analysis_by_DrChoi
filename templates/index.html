@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}대시보드 - 홍채 AI 분석{% endblock %}
+
+{% block content %}
+<h4 class="mb-4"><i class="bi bi-speedometer2 me-2 text-info"></i>연구 대시보드</h4>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card stat-card text-center">
+      <div class="card-body">
+        <div class="stat-icon text-primary"><i class="bi bi-images"></i></div>
+        <div class="stat-value">{{ total_images }}</div>
+        <div class="stat-label">전체 이미지</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card text-center">
+      <div class="card-body">
+        <div class="stat-icon text-success"><i class="bi bi-check2-square"></i></div>
+        <div class="stat-value">{{ labeled_images }}</div>
+        <div class="stat-label">라벨링 완료</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card text-center">
+      <div class="card-body">
+        <div class="stat-icon text-warning"><i class="bi bi-tags"></i></div>
+        <div class="stat-value">{{ total_labels }}</div>
+        <div class="stat-label">총 라벨 수</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card text-center">
+      <div class="card-body">
+        <div class="stat-icon text-danger"><i class="bi bi-cpu"></i></div>
+        <div class="stat-value">{{ total_sessions }}</div>
+        <div class="stat-label">학습 세션</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-8">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-clock-history me-2"></i>최근 업로드 이미지</span>
+        <a href="/gallery" class="btn btn-sm btn-outline-light">전체보기</a>
+      </div>
+      <div class="card-body p-0">
+        <div id="recentImages" class="d-flex flex-wrap p-3 gap-2">
+          <div class="text-muted small p-2">로딩 중...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-bar-chart me-2"></i>카테고리별 라벨 분포</div>
+      <div class="card-body">
+        <canvas id="labelChart" height="200"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-lightning me-2"></i>빠른 시작</div>
+      <div class="card-body d-grid gap-2">
+        <a href="/upload" class="btn btn-primary">
+          <i class="bi bi-cloud-upload me-2"></i>홍채 이미지 업로드
+        </a>
+        <a href="/gallery" class="btn btn-outline-secondary">
+          <i class="bi bi-tag me-2"></i>라벨링 시작
+        </a>
+        <a href="/train" class="btn btn-outline-success">
+          <i class="bi bi-cpu me-2"></i>딥러닝 학습
+        </a>
+        <div class="btn-group">
+          <a href="/api/export/csv" class="btn btn-outline-warning btn-sm">
+            <i class="bi bi-filetype-csv me-1"></i>CSV 내보내기
+          </a>
+          <a href="/api/export/json" class="btn btn-outline-info btn-sm">
+            <i class="bi bi-filetype-json me-1"></i>JSON 내보내기
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadDashboard() {
+  const res = await fetch('/api/images?per_page=12');
+  const data = await res.json();
+  const container = document.getElementById('recentImages');
+  if (!data.images.length) {
+    container.innerHTML = '<p class="text-muted p-3">아직 업로드된 이미지가 없습니다. <a href="/upload">업로드</a>해 주세요.</p>';
+    return;
+  }
+  container.innerHTML = data.images.map(img => `
+    <a href="/label/${img.id}" class="text-decoration-none">
+      <div class="recent-thumb">
+        <img src="/uploads/${img.filename}" alt="${img.original_filename}" title="${img.original_filename}">
+        <span class="badge ${img.label_count > 0 ? 'bg-success' : 'bg-secondary'}">${img.label_count > 0 ? img.label_count + '개' : '미라벨'}</span>
+      </div>
+    </a>
+  `).join('');
+}
+
+async function loadChart() {
+  const res = await fetch('/api/categories');
+  const cats = await res.json();
+  if (!cats.length) return;
+  const ctx = document.getElementById('labelChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: cats.map(c => c.name),
+      datasets: [{
+        data: cats.map(c => c.label_count),
+        backgroundColor: cats.map(c => c.color),
+      }]
+    },
+    options: {
+      plugins: { legend: { position: 'bottom', labels: { color: '#ccc', font: { size: 10 } } } },
+    }
+  });
+}
+
+loadDashboard();
+loadChart();
+</script>
+{% endblock %}

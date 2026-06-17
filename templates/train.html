@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block title %}딥러닝 학습 - 홍채 AI 분석{% endblock %}
+
+{% block content %}
+<h4 class="mb-4"><i class="bi bi-cpu me-2 icon-glow-cyan"></i>딥러닝 모델 학습</h4>
+
+<div class="row g-4">
+  <!-- 설정 패널 -->
+  <div class="col-md-5">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-gear me-2"></i>학습 설정</div>
+      <div class="card-body">
+        {% if labeled_count < 4 %}
+        <div class="alert alert-warning py-2 mb-3">
+          <i class="bi bi-exclamation-triangle me-2"></i>
+          라벨된 이미지 <strong>{{ labeled_count }}개</strong> — 최소 4개 이상 필요합니다.
+          <a href="/gallery" class="ms-1">라벨링 하러 가기</a>
+        </div>
+        {% else %}
+        <div class="alert alert-success py-2 mb-3">
+          <i class="bi bi-check-circle me-2"></i>라벨된 이미지 <strong>{{ labeled_count }}개</strong> 학습 가능
+        </div>
+        {% endif %}
+
+        <div class="mb-2">
+          <label class="form-label">세션 이름</label>
+          <input type="text" id="sessionName" class="form-control form-control-sm" placeholder="예: ResNet50_v1">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">모델 아키텍처</label>
+          <select id="modelType" class="form-select form-select-sm">
+            <option value="resnet50">ResNet50 (추천 - 높은 정확도)</option>
+            <option value="resnet18">ResNet18 (빠른 학습)</option>
+            <option value="efficientnet">EfficientNet-B0 (경량)</option>
+          </select>
+        </div>
+
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label">에포크 수</label>
+            <input type="number" id="epochs" class="form-control form-control-sm" value="10" min="1" max="200">
+          </div>
+          <div class="col-6">
+            <label class="form-label">배치 크기</label>
+            <select id="batchSize" class="form-select form-select-sm">
+              <option value="4">4</option>
+              <option value="8">8</option>
+              <option value="16" selected>16</option>
+              <option value="32">32</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">학습률</label>
+          <select id="learningRate" class="form-select form-select-sm">
+            <option value="0.0001">0.0001 (세밀)</option>
+            <option value="0.001" selected>0.001 (기본)</option>
+            <option value="0.01">0.01 (빠름)</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">학습 카테고리 <span class="text-muted">(미선택시 전체)</span></label>
+          <div id="categoryCheckboxes" class="d-flex flex-column gap-1">
+            {% for cat in categories %}
+            <div class="form-check form-check-sm mb-0">
+              <input class="form-check-input" type="checkbox" value="{{ cat.id }}" id="cat{{ cat.id }}">
+              <label class="form-check-label" for="cat{{ cat.id }}" style="font-size:0.8rem">
+                <span class="badge me-1" style="background:{{ cat.color }};font-size:0.6rem">●</span>
+                {{ cat.name }}
+                <span class="text-muted">({{ cat.label_count }}개)</span>
+              </label>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <button id="startTrainBtn" class="btn btn-success w-100" {% if labeled_count < 4 %}disabled{% endif %}>
+          <i class="bi bi-play-fill me-2"></i>학습 시작
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 우측: 로그 + 세션 목록 -->
+  <div class="col-md-7">
+    <!-- 학습 진행 카드 (숨김 초기) -->
+    <div class="card mb-3" id="logCard" style="display:none">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-terminal me-2"></i>학습 진행</span>
+        <span id="trainStatusBadge" class="badge bg-warning">실행 중</span>
+      </div>
+      <div class="card-body p-3">
+        <!-- 에포크 진행 -->
+        <div id="epochProgress" class="mb-3" style="display:none">
+          <div class="d-flex justify-content-between small mb-1">
+            <span class="text-sub">에포크 진행</span>
+            <span id="epochLabel" class="text-sub">0 / 0</span>
+          </div>
+          <div class="epoch-bar-track">
+            <div class="epoch-bar-fill" id="epochBarFill" style="width:0%"></div>
+          </div>
+          <div class="d-flex gap-3 mt-2" style="font-size:0.78rem">
+            <span>Train Acc: <strong id="trainAccLive" class="text-success">-</strong></span>
+            <span>Val Acc: <strong id="valAccLive" class="text-info">-</strong></span>
+          </div>
+        </div>
+      </div>
+      <div class="train-log" id="trainLog"></div>
+    </div>
+
+    <!-- 세션 이력 -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-list-ul me-2"></i>학습 세션 이력</div>
+      <div class="card-body p-0">
+        {% if not sessions %}
+        <p class="text-muted text-center py-4 small">아직 학습 세션이 없습니다.</p>
+        {% else %}
+        <div>
+          {% for s in sessions %}
+          <div class="session-item">
+            <div class="d-flex justify-content-between align-items-start">
+              <div class="flex-grow-1 me-2">
+                <div class="fw-semibold" style="font-size:0.875rem">{{ s.name }}</div>
+                <div class="text-muted mt-1" style="font-size:0.75rem">
+                  {{ s.model_type }} · {{ s.epochs }}에포크 · {{ s.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </div>
+                {% if s.val_accuracy is not none %}
+                <div class="d-flex gap-1 mt-1 flex-wrap">
+                  <span class="acc-badge {% if s.val_accuracy >= 0.8 %}high{% elif s.val_accuracy >= 0.5 %}mid{% else %}low{% endif %}">
+                    <i class="bi bi-graph-up"></i> val {{ "%.1f"|format(s.val_accuracy * 100) }}%
+                  </span>
+                  {% if s.train_accuracy is not none %}
+                  <span class="acc-badge mid">
+                    <i class="bi bi-activity"></i> train {{ "%.1f"|format(s.train_accuracy * 100) }}%
+                  </span>
+                  {% endif %}
+                </div>
+                {% endif %}
+              </div>
+              <div class="d-flex flex-column align-items-end gap-1 flex-shrink-0">
+                <span class="badge {% if s.status=='completed' %}bg-success{% elif s.status=='running' %}bg-warning{% elif s.status=='failed' %}bg-danger{% else %}bg-secondary{% endif %}">
+                  {{ s.status }}
+                </span>
+                <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="deleteSession({{ s.id }})">
+                  <i class="bi bi-trash" style="font-size:11px"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let pollingInterval = null;
+let currentEpochs = 10;
+
+document.getElementById('startTrainBtn').addEventListener('click', async () => {
+  const name = document.getElementById('sessionName').value.trim()
+    || `Training_${new Date().toISOString().slice(0, 19).replace('T', '_')}`;
+  const selectedCats = [...document.querySelectorAll('#categoryCheckboxes input:checked')].map(el => parseInt(el.value));
+  currentEpochs = parseInt(document.getElementById('epochs').value);
+
+  const payload = {
+    name,
+    model_type: document.getElementById('modelType').value,
+    epochs: currentEpochs,
+    batch_size: parseInt(document.getElementById('batchSize').value),
+    learning_rate: parseFloat(document.getElementById('learningRate').value),
+    category_ids: selectedCats,
+  };
+
+  const btn = document.getElementById('startTrainBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>학습 시작 중...';
+
+  try {
+    const data = await api.post('/api/train/start', payload);
+    const logCard = document.getElementById('logCard');
+    logCard.style.display = '';
+    document.getElementById('trainLog').innerHTML = '';
+    document.getElementById('epochProgress').style.display = '';
+    document.getElementById('epochLabel').textContent = `0 / ${currentEpochs}`;
+    document.getElementById('epochBarFill').style.width = '0%';
+    startPolling(data.session_id);
+    toast('학습이 시작되었습니다.', 'info');
+  } catch (e) {
+    toast('학습 시작 실패: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-play-fill me-2"></i>학습 시작';
+  }
+});
+
+function startPolling(sessionId) {
+  if (pollingInterval) clearInterval(pollingInterval);
+  pollingInterval = setInterval(() => pollLog(sessionId), 2000);
+  pollLog(sessionId);
+}
+
+async function pollLog(sessionId) {
+  try {
+    const data = await api.get(`/api/train/${sessionId}/log`);
+    const logEl = document.getElementById('trainLog');
+
+    // Parse epoch info from logs
+    let currentEpoch = 0;
+    let trainAcc = null, valAcc = null;
+    data.logs.forEach(line => {
+      const m = line.match(/Epoch (\d+)\/\d+.*train_acc=([\d.]+).*val_acc=([\d.]+)/);
+      if (m) {
+        currentEpoch = parseInt(m[1]);
+        trainAcc = parseFloat(m[2]);
+        valAcc = parseFloat(m[3]);
+      }
+    });
+
+    if (currentEpoch > 0) {
+      const pct = (currentEpoch / currentEpochs * 100).toFixed(1);
+      document.getElementById('epochBarFill').style.width = pct + '%';
+      document.getElementById('epochLabel').textContent = `${currentEpoch} / ${currentEpochs}`;
+      if (trainAcc !== null) document.getElementById('trainAccLive').textContent = (trainAcc * 100).toFixed(1) + '%';
+      if (valAcc !== null) document.getElementById('valAccLive').textContent = (valAcc * 100).toFixed(1) + '%';
+    }
+
+    logEl.innerHTML = data.logs.map(l => {
+      const cls = l.includes('[ERROR]') ? 'log-error' : l.includes('완료') ? 'log-info' : '';
+      return `<div class="${cls}">${esc(l)}</div>`;
+    }).join('');
+    logEl.scrollTop = logEl.scrollHeight;
+
+    const badge = document.getElementById('trainStatusBadge');
+    const btn = document.getElementById('startTrainBtn');
+    if (data.status === 'completed') {
+      badge.className = 'badge bg-success';
+      badge.textContent = '완료';
+      document.getElementById('epochBarFill').style.width = '100%';
+      clearInterval(pollingInterval);
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-play-fill me-2"></i>학습 시작';
+      toast('학습이 완료되었습니다!', 'success', 4000);
+      setTimeout(() => location.reload(), 2000);
+    } else if (data.status === 'failed') {
+      badge.className = 'badge bg-danger';
+      badge.textContent = '실패';
+      clearInterval(pollingInterval);
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-play-fill me-2"></i>학습 시작';
+      toast('학습 중 오류가 발생했습니다.', 'error');
+    } else {
+      badge.className = 'badge bg-warning';
+      badge.textContent = '학습 중';
+    }
+  } catch (e) {
+    console.error('Poll error', e);
+  }
+}
+
+async function deleteSession(id) {
+  if (!confirm('이 학습 세션을 삭제하시겠습니까? 저장된 모델도 삭제됩니다.')) return;
+  try {
+    await api.del(`/api/train/${id}`);
+    toast('세션이 삭제되었습니다.', 'success');
+    location.reload();
+  } catch (e) {
+    toast('삭제 실패: ' + e.message, 'error');
+  }
+}
+</script>
+{% endblock %}

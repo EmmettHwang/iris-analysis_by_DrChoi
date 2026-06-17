@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Database (로컬 데이터 — 업로드 후 직접 관리)
+*.db
+
+# Uploaded images (용량 큰 파일 제외)
+static/uploads/
+
+# Trained models
+model/saved/
+model/eyelid_rf.pkl
+
+# Exports
+exports/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Logs
+*.log
+/tmp/

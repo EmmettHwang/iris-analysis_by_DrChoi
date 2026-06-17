@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}{{ subject_id }} - 피험자 상세 - 홍채 AI 분석{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-4">
+  <a href="/subjects" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-left"></i></a>
+  <div class="subject-avatar-lg">{{ (subject.name if subject and subject.name else subject_id)[0].upper() }}</div>
+  <div>
+    <h4 class="mb-0" id="displayName">{{ subject.name if subject and subject.name else '이름 없음' }}</h4>
+    <div class="text-muted small">피험자 ID: <code>{{ subject_id }}</code></div>
+  </div>
+  <button class="btn btn-sm btn-outline-primary ms-auto" onclick="openEditModal()">
+    <i class="bi bi-pencil me-1"></i>정보 편집
+  </button>
+</div>
+
+<div class="row g-4">
+  <!-- 왼쪽: 기본 정보 + 진단 소견 -->
+  <div class="col-lg-4">
+    <!-- 기본 정보 -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-person me-2"></i>기본 정보</div>
+      <div class="card-body">
+        <table class="table table-sm table-borderless mb-0" style="color:var(--text-sub)">
+          <tr><td class="text-muted" style="width:5rem">이름</td><td id="infoName">{{ subject.name if subject and subject.name else '—' }}</td></tr>
+          <tr><td class="text-muted">성별</td><td id="infoGender">{{ subject.gender if subject and subject.gender else '—' }}</td></tr>
+          <tr><td class="text-muted">출생년도</td><td id="infoBirth">{{ subject.birth_year if subject and subject.birth_year else '—' }}</td></tr>
+          <tr><td class="text-muted">이미지</td><td>{{ images|length }}장</td></tr>
+          <tr><td class="text-muted">메모</td><td id="infoNotes" style="white-space:pre-wrap">{{ subject.notes if subject and subject.notes else '—' }}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- 진단 소견 -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-file-medical me-2"></i>진단 / 소견</span>
+        <button class="btn btn-sm btn-outline-success" onclick="saveDiagnosis()" id="saveBtn" style="display:none">
+          <i class="bi bi-check2 me-1"></i>저장
+        </button>
+      </div>
+      <div class="card-body p-0">
+        <textarea id="diagnosisInput"
+          class="form-control border-0 rounded-0"
+          placeholder="진단 내용, 소견, 특이사항 등을 자유롭게 입력하세요.&#10;&#10;예:&#10;- 소화기계 약화 징후 (라쿠나 다수)&#10;- 림프 울체 가능성&#10;- 스트레스 지수 높음"
+          rows="12"
+          style="background:transparent;resize:none;font-size:0.9rem;color:var(--text-main)"
+          oninput="document.getElementById('saveBtn').style.display=''"
+        >{{ subject.diagnosis if subject and subject.diagnosis else '' }}</textarea>
+      </div>
+      <div class="card-footer text-muted" style="font-size:0.75rem" id="savedAt">
+        {% if subject and subject.updated_at %}마지막 저장: {{ subject.updated_at.strftime('%Y-%m-%d %H:%M') if subject.updated_at else '' }}{% else %}아직 저장된 진단이 없습니다.{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- 오른쪽: 홍채 이미지 목록 -->
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-images me-2"></i>홍채 이미지 ({{ images|length }}장)</span>
+        <a href="/upload" class="btn btn-sm btn-outline-primary">
+          <i class="bi bi-cloud-upload me-1"></i>이미지 추가
+        </a>
+      </div>
+      <div class="card-body">
+        {% if images %}
+        <div class="row g-2">
+          {% for img in images %}
+          <div class="col-6 col-sm-4 col-md-3">
+            <a href="/label/{{ img.id }}" class="text-decoration-none">
+              <div class="img-thumb-card">
+                <img src="/uploads/{{ img.filename }}" alt="{{ img.original_filename }}" class="img-thumb">
+                <div class="img-thumb-info">
+                  <div class="text-truncate small">{{ img.original_filename }}</div>
+                  <div class="d-flex gap-1 mt-1 flex-wrap">
+                    {% if img.eye_side == 'left' %}<span class="badge bg-info" style="font-size:0.65rem">좌안</span>
+                    {% elif img.eye_side == 'right' %}<span class="badge bg-warning text-dark" style="font-size:0.65rem">우안</span>
+                    {% endif %}
+                    <span class="badge {% if img.labels|length > 0 %}bg-success{% else %}bg-secondary{% endif %}" style="font-size:0.65rem">
+                      {{ img.labels|length }}개 라벨
+                    </span>
+                  </div>
+                  <div class="text-muted" style="font-size:0.65rem">{{ img.uploaded_at.strftime('%Y-%m-%d') }}</div>
+                </div>
+              </div>
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center text-muted py-5">
+          <i class="bi bi-camera fs-1 mb-3 d-block"></i>
+          이 피험자의 이미지가 없습니다.<br>
+          <a href="/upload" class="btn btn-sm btn-primary mt-3">이미지 업로드</a>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 정보 편집 모달 -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content" style="background:var(--card-bg);border:1px solid var(--border)">
+      <div class="modal-header border-0">
+        <h5 class="modal-title">피험자 정보 편집</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label text-muted small">이름</label>
+          <input type="text" id="editName" class="form-control" style="background:var(--input-bg);color:var(--text-main);border-color:var(--border)" value="{{ subject.name if subject and subject.name else '' }}">
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col">
+            <label class="form-label text-muted small">출생년도</label>
+            <input type="number" id="editBirth" class="form-control" style="background:var(--input-bg);color:var(--text-main);border-color:var(--border)" placeholder="예: 1985" value="{{ subject.birth_year if subject and subject.birth_year else '' }}">
+          </div>
+          <div class="col">
+            <label class="form-label text-muted small">성별</label>
+            <select id="editGender" class="form-select" style="background:var(--input-bg);color:var(--text-main);border-color:var(--border)">
+              <option value="">선택 안 함</option>
+              <option value="남" {% if subject and subject.gender == '남' %}selected{% endif %}>남</option>
+              <option value="여" {% if subject and subject.gender == '여' %}selected{% endif %}>여</option>
+              <option value="기타" {% if subject and subject.gender == '기타' %}selected{% endif %}>기타</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label text-muted small">메모</label>
+          <textarea id="editNotes" class="form-control" rows="3" style="background:var(--input-bg);color:var(--text-main);border-color:var(--border)">{{ subject.notes if subject and subject.notes else '' }}</textarea>
+        </div>
+      </div>
+      <div class="modal-footer border-0">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+        <button type="button" class="btn btn-primary" onclick="saveInfo()">저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SUBJECT_ID = {{ subject_id | tojson }};
+
+function openEditModal() {
+  new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+
+async function saveInfo() {
+  const payload = {
+    name:       document.getElementById('editName').value.trim() || null,
+    birth_year: parseInt(document.getElementById('editBirth').value) || null,
+    gender:     document.getElementById('editGender').value || null,
+    notes:      document.getElementById('editNotes').value.trim() || null,
+  };
+  const res = await fetch(`/api/subjects/${encodeURIComponent(SUBJECT_ID)}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+  });
+  if (!res.ok) { alert('저장 실패'); return; }
+  const data = await res.json();
+  // UI 업데이트
+  document.getElementById('displayName').textContent = data.name || '이름 없음';
+  document.getElementById('infoName').textContent    = data.name || '—';
+  document.getElementById('infoGender').textContent  = data.gender || '—';
+  document.getElementById('infoBirth').textContent   = data.birth_year || '—';
+  document.getElementById('infoNotes').textContent   = data.notes || '—';
+  bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
+}
+
+async function saveDiagnosis() {
+  const diagnosis = document.getElementById('diagnosisInput').value;
+  const res = await fetch(`/api/subjects/${encodeURIComponent(SUBJECT_ID)}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ diagnosis }),
+  });
+  if (!res.ok) { alert('저장 실패'); return; }
+  const data = await res.json();
+  document.getElementById('saveBtn').style.display = 'none';
+  document.getElementById('savedAt').textContent = '마지막 저장: ' + (data.updated_at || '').slice(0,16).replace('T',' ');
+}
+</script>
+
+<style>
+.subject-avatar-lg {
+  width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 1.4rem; color: #fff;
+}
+.img-thumb-card {
+  border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+  transition: transform 0.15s, box-shadow 0.15s;
+  background: var(--card-bg);
+}
+.img-thumb-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+.img-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.img-thumb-info { padding: 6px 8px; }
+</style>
+{% endblock %}

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}피험자 목록 - 홍채 AI 분석{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0"><i class="bi bi-people-fill me-2 text-info"></i>피험자 목록</h4>
+  <span class="text-muted small" id="subjectCount">로딩 중...</span>
+</div>
+
+<!-- 검색 -->
+<div class="card mb-4">
+  <div class="card-body py-2">
+    <div class="input-group">
+      <span class="input-group-text bg-transparent border-0"><i class="bi bi-search text-muted"></i></span>
+      <input type="text" id="searchInput" class="form-control bg-transparent border-0" placeholder="피험자 ID 또는 이름 검색..." oninput="filterSubjects()">
+    </div>
+  </div>
+</div>
+
+<!-- 피험자 카드 목록 -->
+<div id="subjectGrid" class="row g-3">
+  <div class="col-12 text-center text-muted py-5">
+    <div class="spinner-border spinner-border-sm me-2"></div>로딩 중...
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allSubjects = [];
+
+async function loadSubjects() {
+  const res  = await fetch('/api/subjects');
+  allSubjects = await res.json();
+  renderSubjects(allSubjects);
+  document.getElementById('subjectCount').textContent = `총 ${allSubjects.length}명`;
+}
+
+function filterSubjects() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = allSubjects.filter(s =>
+    s.subject_id.toLowerCase().includes(q) ||
+    (s.name || '').toLowerCase().includes(q)
+  );
+  renderSubjects(filtered);
+}
+
+function renderSubjects(list) {
+  const grid = document.getElementById('subjectGrid');
+  if (!list.length) {
+    grid.innerHTML = '<div class="col-12 text-center text-muted py-5"><i class="bi bi-person-x fs-1 mb-3 d-block"></i>피험자가 없습니다.<br><small>이미지 업로드 시 피험자 ID를 입력하면 여기에 표시됩니다.</small></div>';
+    return;
+  }
+  grid.innerHTML = list.map(s => `
+    <div class="col-sm-6 col-md-4 col-lg-3">
+      <a href="/subjects/${encodeURIComponent(s.subject_id)}" class="text-decoration-none">
+        <div class="card h-100 subject-card">
+          <div class="card-body">
+            <div class="d-flex align-items-center mb-2 gap-2">
+              <div class="subject-avatar">${(s.name || s.subject_id).charAt(0).toUpperCase()}</div>
+              <div class="overflow-hidden">
+                <div class="fw-semibold text-truncate">${s.name || '이름 없음'}</div>
+                <div class="text-muted small text-truncate">${s.subject_id}</div>
+              </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap mt-2">
+              ${s.gender ? `<span class="badge bg-secondary">${s.gender}</span>` : ''}
+              ${s.birth_year ? `<span class="badge bg-secondary">${s.birth_year}년생</span>` : ''}
+              <span class="badge bg-primary">${s.image_count}장</span>
+              ${s.has_diagnosis ? '<span class="badge bg-success">진단 있음</span>' : '<span class="badge bg-outline text-muted" style="border:1px solid var(--border)">미진단</span>'}
+            </div>
+            ${s.last_upload ? `<div class="text-muted mt-2" style="font-size:0.72rem">최근 업로드 ${s.last_upload.slice(0,10)}</div>` : ''}
+          </div>
+        </div>
+      </a>
+    </div>
+  `).join('');
+}
+
+loadSubjects();
+</script>
+
+<style>
+.subject-card { transition: transform 0.15s, box-shadow 0.15s; cursor: pointer; }
+.subject-card:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+.subject-avatar {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 1rem; color: #fff; flex-shrink: 0;
+}
+</style>
+{% endblock %}
