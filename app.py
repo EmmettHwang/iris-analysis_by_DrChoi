@@ -18,6 +18,39 @@ os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 app = Flask(__name__)
+
+# ── 화면은 캐시하지 않는다 ────────────────────────────────────────────────
+# ⚠️ 캐시 정책은 **원본이 선언해야 한다.** 원본이 말하지 않으면 브라우저·CDN 이
+#    대신 정해서 며칠씩 옛 화면을 들고 있는다(2026-09-10 llec 에서 겪었다 —
+#    크롬·엣지 양쪽에서 재현, Ctrl+Shift+R 로도 안 풀렸다).
+# ⚠️ 서비스워커 파일은 **특히** 캐시되면 안 된다 — 캐시되면 「워커를 없애는 워커」
+#    조차 배달되지 않아 손을 쓸 수 없다.
+# 자산(js·css)은 화면이 ?v=<버전> 을 붙여 부르므로 버전이 바뀌면 주소가 바뀐다.
+_NO_STORE_EXT = (".html", ".js", ".css", ".json", ".map")
+_KEEP_CACHE_PREFIX = ("/uploads/", "/api/uploads/", "/materials/", "/thumbnails/",
+                      "/static/img/", "/images/", "/media/", "/assets/img/")
+
+
+def _is_app_shell(path):
+    path = (path or "/").lower()
+    last = path.rsplit("/", 1)[-1]
+    if path.startswith(_KEEP_CACHE_PREFIX):
+        return False
+    return path.endswith(_NO_STORE_EXT) or path.endswith("/") or "." not in last
+
+
+@app.after_request
+def _no_store_for_app_shell(response):
+    try:
+        from flask import request as _rq
+        if _is_app_shell(_rq.path):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+    except Exception:
+        pass
+    return response
+# ──────────────────────────────────────────────────────────────────────────
+
 app.config["SECRET_KEY"] = "iris-research-dev-key-2024"
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(BASE_DIR, 'iris_data.db')}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
