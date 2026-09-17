@@ -98,6 +98,7 @@ bash run.sh
 브라우저에서 `http://localhost:5050` 접속
 
 ---
+
 ## 🔌 API 엔드포인트 요약
 
 ### 이미지
