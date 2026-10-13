@@ -164,7 +164,7 @@ async function addIridologyPreset() {
 }
 
 async function deleteCategory(id) {
-  if (!confirm('이 카테고리를 삭제하시겠습니까? 해당 카테고리의 모든 라벨도 삭제됩니다.')) return;
+  if (!await uiConfirm('이 카테고리를 삭제할까요?<br><strong>이 카테고리로 붙인 라벨도 모두 함께 지워지며 되돌릴 수 없습니다.</strong>', {title:'카테고리 삭제', okText:'삭제', danger:true})) return;
   try {
     await api.del(`/api/categories/${id}`);
     document.getElementById(`cat-card-${id}`)?.remove();

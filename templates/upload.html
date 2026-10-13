@@ -36,6 +36,38 @@
             <input type="text" id="notes" class="form-control form-control-sm" placeholder="선택사항">
           </div>
         </div>
+
+        <!-- 개인정보 동의 (2026-10-13) — 문구는 privacy.py 한 곳에서 온다 -->
+        <div class="consent-box mt-3" id="consentBox">
+          <div class="form-check consent-all">
+            <input class="form-check-input" type="checkbox" id="consentAll">
+            <label class="form-check-label fw-semibold" for="consentAll">아래 필수 동의에 모두 동의(확인)합니다 <span class="consent-sub">— 누르면 전문이 차례로 열립니다</span></label>
+          </div>
+          {% for it in terms["items"] %}
+          <div class="consent-item">
+            <div class="form-check">
+              <input class="form-check-input consent-chk" type="checkbox" id="consent_{{ it.key }}" data-key="{{ it.key }}">
+              <label class="form-check-label" for="consent_{{ it.key }}"><strong>{{ it.label }}</strong><br>
+                <span class="consent-sub">{{ it.checkbox }}</span></label>
+            </div>
+            <button type="button" class="btn btn-link btn-sm consent-view" data-key="{{ it.key }}">전문 보기</button>
+          </div>
+          {% endfor %}
+          <div class="consent-note">동의하지 않으면 업로드할 수 없습니다. 동의 기록(시각·동의서 버전 {{ terms.version }})은 서버에 남습니다.
+            <a href="/privacy" target="_blank">개인정보처리방침</a></div>
+        </div>
+
+        <!-- 진행 막대 -->
+        <div id="uploadProgress" class="upload-progress d-none mt-3">
+          <div class="d-flex justify-content-between small mb-1">
+            <span id="upName" class="text-truncate" style="max-width:60%"></span>
+            <span id="upPct">0%</span>
+          </div>
+          <div class="progress" style="height:10px"><div id="upBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div></div>
+          <div class="d-flex justify-content-between small mt-1 text-muted">
+            <span id="upAmount"></span><span id="upEta"></span>
+          </div>
+        </div>
       </div>
       <div class="card-footer d-flex justify-content-between align-items-center">
         <span id="uploadStatus" class="text-muted" style="font-size:0.8rem"></span>
@@ -72,6 +104,16 @@
 {% endblock %}
 
 {% block scripts %}
+<style>
+.consent-box { border:1px solid var(--border); border-radius:var(--radius); padding:.75rem .9rem; background:var(--bg-card2); }
+.consent-box.consent-missing { border-color:var(--red); box-shadow:0 0 0 3px var(--red-mid); }
+.consent-all { padding-bottom:.5rem; margin-bottom:.5rem; border-bottom:1px dashed var(--border); }
+.consent-item { display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; margin:.35rem 0; }
+.consent-item .form-check-label { font-size:.82rem; color:var(--text); }
+.consent-sub { font-size:.75rem; color:var(--text-sub); }
+.consent-view { white-space:nowrap; font-size:.75rem; padding:0 .25rem; }
+.consent-note { font-size:.72rem; color:var(--text-muted); margin-top:.4rem; }
+</style>
 <script>
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -116,8 +158,65 @@ function removeFile(idx) {
   renderPreviews();
 }
 
+const CONSENT_TERMS = {{ terms | tojson }};
+const MAX_BYTES = 50 * 1024 * 1024;
+const fmtMB = b => b < 1024 * 1024 ? Math.max(1, Math.round(b / 1024)) + 'KB' : (b / 1024 / 1024).toFixed(1) + 'MB';
+
+/* 엉뚱한 곳에 떨어뜨려도 브라우저가 파일을 열어 화면을 떠나지 않게 */
+['dragover', 'drop'].forEach(ev => window.addEventListener(ev, e => {
+  if (!dropZone.contains(e.target)) e.preventDefault();
+}));
+
+const consentChks = [...document.querySelectorAll('.consent-chk')];
+const consentAll = document.getElementById('consentAll');
+function syncAll() { consentAll.checked = consentChks.every(x => x.checked); markConsent(); }
+function markConsent(showError) {
+  const ok = consentChks.every(x => x.checked);
+  document.getElementById('consentBox').classList.toggle('consent-missing', !!showError && !ok);
+  return ok;
+}
+/* 동의서를 «읽고» 체크한다 — 전문 모달을 끝까지 내려야 「동의합니다」가 켜지고, 그 단추로만 체크된다. */
+async function readAndAgree(key) {
+  const it = CONSENT_TERMS.items.find(x => x.key === key);
+  const agreed = await uiModal({ title: it.label, type: 'info', size: 'modal-lg', requireScroll: true,
+    html: consentTableHTML(it) + `<p class="small mt-3 mb-0"><strong>확인 문구:</strong> ${esc(it.checkbox)}</p>`,
+    okText: '동의합니다', cancelText: '닫기' });
+  if (agreed) document.getElementById('consent_' + key).checked = true;
+  syncAll();
+  return agreed;
+}
+consentChks.forEach(c => c.addEventListener('click', e => {
+  if (!c.checked) { syncAll(); return; }          // 해제는 자유
+  e.preventDefault();                              // 체크는 모달의 「동의합니다」로만
+  readAndAgree(c.dataset.key);
+}));
+consentAll.addEventListener('click', async e => {
+  if (!consentAll.checked) { consentChks.forEach(c => c.checked = false); syncAll(); return; }
+  e.preventDefault();
+  for (const c of consentChks) {                   // 아직 안 읽은 것만 차례로 연다
+    if (!c.checked && !(await readAndAgree(c.dataset.key))) break;
+  }
+  syncAll();
+});
+document.querySelectorAll('.consent-view').forEach(b => b.addEventListener('click', () => readAndAgree(b.dataset.key)));
+
+function resetBtn() {
+  uploadBtn.disabled = selectedFiles.length === 0;
+  uploadBtn.innerHTML = `<i class="bi bi-upload me-2"></i>업로드 (<span id="fileCount">${selectedFiles.length}</span>개)`;
+}
+
 uploadBtn.addEventListener('click', async () => {
   if (!selectedFiles.length) return;
+  if (!markConsent(true)) {
+    await uiAlert('홍채 사진은 <strong>생체정보</strong>입니다. 올리기 전에 아래 두 가지 필수 동의에 체크해 주세요.<br>'
+      + '<span class="small">① 개인정보 수집·이용 동의 &nbsp; ② 민감정보(생체·건강정보) 처리 동의</span>', 'warning', '동의가 필요합니다');
+    return;
+  }
+  const total = selectedFiles.reduce((a, f) => a + f.size, 0);
+  if (total > MAX_BYTES) {
+    await uiAlert(`고른 파일이 모두 <strong>${fmtMB(total)}</strong>입니다. 한 번에 <strong>50MB</strong>까지 올릴 수 있으니 나눠서 올려 주세요.`, 'warning', '파일이 너무 큽니다');
+    return;
+  }
   uploadBtn.disabled = true;
   uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>업로드 중...';
   document.getElementById('uploadStatus').textContent = '';
@@ -127,12 +226,47 @@ uploadBtn.addEventListener('click', async () => {
   formData.append('eye_side', document.getElementById('eyeSide').value);
   formData.append('subject_id', document.getElementById('subjectId').value);
   formData.append('notes', document.getElementById('notes').value);
+  formData.append('consent_privacy', document.getElementById('consent_privacy').checked ? '1' : '0');
+  formData.append('consent_sensitive', document.getElementById('consent_sensitive').checked ? '1' : '0');
+  formData.append('terms_version', CONSENT_TERMS.version);
 
-  try {
-    const res = await fetch('/api/images/upload', { method: 'POST', body: formData });
-    const data = await res.json();
+  const prog = document.getElementById('uploadProgress');
+  const bar = document.getElementById('upBar');
+  prog.classList.remove('d-none');
+  document.getElementById('upName').textContent = selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles[0].name} 외 ${selectedFiles.length - 1}개`;
+  const t0 = Date.now();
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/images/upload');
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 100);
+    bar.style.width = pct + '%';
+    document.getElementById('upPct').textContent = pct + '%';
+    document.getElementById('upAmount').textContent = `${fmtMB(e.loaded)} / ${fmtMB(e.total)}`;
+    const el = (Date.now() - t0) / 1000, rate = e.loaded / Math.max(el, 0.1);
+    const left = Math.max(0, Math.round((e.total - e.loaded) / rate));
+    document.getElementById('upEta').textContent = pct < 100 ? `남은 시간 약 ${left}초` : '서버에서 저장하는 중…';
+  };
+  const done = async (ok, msg) => {
+    bar.classList.remove('progress-bar-animated');
+    bar.classList.toggle('bg-danger', !ok);
+    if (!ok) {
+      document.getElementById('uploadStatus').textContent = msg;
+      await uiAlert(esc(msg), 'error', '업로드 실패');
+    }
+    resetBtn();
+  };
+  xhr.onerror = () => done(false, '서버와 연결이 끊겼습니다. 네트워크를 확인하고 다시 시도하세요.');
+  xhr.onload = async () => {
+    let data = {};
+    try { data = JSON.parse(xhr.responseText); } catch (_) {}
     const result = document.getElementById('uploadResult');
-
+    if (xhr.status !== 200) {
+      const why = { 401: '로그인이 풀렸습니다. 새로고침 후 다시 로그인하세요.', 403: '권한이 없습니다.',
+                    413: '파일이 너무 큽니다(한 번에 50MB 까지).' }[xhr.status];
+      return done(false, `${data.error || why || '서버 오류'} (HTTP ${xhr.status})`);
+    }
     if (data.saved && data.saved.length) {
       toast(`${data.saved.length}개 이미지 업로드 완료!`, 'success');
       result.innerHTML = `
@@ -154,16 +288,15 @@ uploadBtn.addEventListener('click', async () => {
       `;
       selectedFiles = [];
       renderPreviews();
+      bar.classList.remove('progress-bar-animated');
+      document.getElementById('upEta').textContent = '완료';
+      resetBtn();
     } else {
-      toast('업로드 실패', 'error');
-      result.innerHTML = `<div class="alert alert-danger py-2 small">${esc(JSON.stringify(data.errors))}</div>`;
+      done(false, '저장된 파일이 없습니다: ' + ((data.errors || []).join(', ') || '이유를 받지 못했습니다'));
+      result.innerHTML = `<div class="alert alert-danger py-2 small">${esc((data.errors || []).join(' / '))}</div>`;
     }
-  } catch (e) {
-    toast('오류: ' + e.message, 'error');
-  }
-
-  uploadBtn.disabled = false;
-  uploadBtn.innerHTML = '<i class="bi bi-upload me-2"></i>업로드 (<span id="fileCount">0</span>개)';
+  };
+  xhr.send(formData);
 });
 </script>
 {% endblock %}

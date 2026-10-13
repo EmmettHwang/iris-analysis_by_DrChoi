@@ -1092,7 +1092,7 @@ async function addLabelNoGeom() { await saveLabel(null); }
 
 // ── 삭제 ─────────────────────────────────────────────────────────────────────
 async function deleteLabel(id) {
-  if (!confirm('이 라벨을 삭제하시겠습니까?')) return;
+  if (!await uiConfirm('이 라벨 1개를 삭제할까요? 되돌릴 수 없습니다.', {title:'라벨 삭제', okText:'삭제', danger:true})) return;
   try {
     await api.del(`/api/labels/${id}`);
     document.getElementById(`label-${id}`)?.remove();

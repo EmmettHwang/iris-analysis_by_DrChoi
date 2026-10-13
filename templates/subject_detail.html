@@ -146,6 +146,23 @@
 <script>
 const SUBJECT_ID = {{ subject_id | tojson }};
 
+/* 저장 — 동의 기록이 없는 피검자면 동의를 받고 한 번 더 보낸다 */
+async function putSubject(payload) {
+  const url = `/api/subjects/${encodeURIComponent(SUBJECT_ID)}`;
+  const send = body => fetch(url, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  let res = await send(payload);
+  if (res.status === 400) {
+    let d = {}; try { d = await res.clone().json(); } catch (_) {}
+    if (d.need_consent) {
+      const c = await askConsent();
+      if (!c) { toast('동의하지 않아 저장하지 않았습니다.', 'info'); return null; }
+      res = await send({ ...payload, ...c });
+    }
+  }
+  if (!res.ok) { await uiAlert('저장하지 못했습니다.<br>' + esc(await failReason(res)), 'error', '저장 실패'); return null; }
+  return res.json();
+}
+
 function openEditModal() {
   new bootstrap.Modal(document.getElementById('editModal')).show();
 }
@@ -157,11 +174,8 @@ async function saveInfo() {
     gender:     document.getElementById('editGender').value || null,
     notes:      document.getElementById('editNotes').value.trim() || null,
   };
-  const res = await fetch(`/api/subjects/${encodeURIComponent(SUBJECT_ID)}`, {
-    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
-  });
-  if (!res.ok) { alert('저장 실패'); return; }
-  const data = await res.json();
+  const data = await putSubject(payload);
+  if (!data) return;
   // UI 업데이트
   document.getElementById('displayName').textContent = data.name || '이름 없음';
   document.getElementById('infoName').textContent    = data.name || '—';
@@ -173,12 +187,8 @@ async function saveInfo() {
 
 async function saveDiagnosis() {
   const diagnosis = document.getElementById('diagnosisInput').value;
-  const res = await fetch(`/api/subjects/${encodeURIComponent(SUBJECT_ID)}`, {
-    method: 'PUT', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ diagnosis }),
-  });
-  if (!res.ok) { alert('저장 실패'); return; }
-  const data = await res.json();
+  const data = await putSubject({ diagnosis });
+  if (!data) return;
   document.getElementById('saveBtn').style.display = 'none';
   document.getElementById('savedAt').textContent = '마지막 저장: ' + (data.updated_at || '').slice(0,16).replace('T',' ');
 }

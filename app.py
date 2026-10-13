@@ -3,8 +3,10 @@ import json
 import uuid
 import threading
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, send_from_directory, abort
+import hmac
+from flask import Flask, render_template, request, jsonify, send_from_directory, abort, Response
 from werkzeug.utils import secure_filename
+import privacy
 from database import db, IrisImage, LabelCategory, Label, Prediction, TrainingSession, Subject, seed_default_categories, add_iridology_presets
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +53,43 @@ def _no_store_for_app_shell(response):
     return response
 # ──────────────────────────────────────────────────────────────────────────
 
+# ── 접근 제한 (2026-10-13) ────────────────────────────────────────────────
+# ⚠️ 이 앱에는 로그인이 없었다. iris.ssirn.co.kr 로 누구나 피검자 목록·홍채 사진·
+#    CSV 내보내기를 볼 수 있었고, 올리기·지우기·학습까지 할 수 있었다.
+#    홍채 사진은 생체정보라 열어 둘 수 없다 → 앱 전체에 Basic 인증을 건다.
+#    아이디·비밀번호는 환경변수(사이트 폴더 .env)로만 받는다. 저장소에 두지 않는다.
+#    설정이 없으면 **열지 않는다**(fail-closed) — 실수로 다시 공개되는 일을 막는다.
+_AUTH_USER = os.environ.get("IRIS_BASIC_USER", "")
+_AUTH_PASS = os.environ.get("IRIS_BASIC_PASS", "")
+# 인증 없이 열어 두는 것: 상태 확인, 처리방침(누구나 읽을 수 있어야 한다), 화면 꾸밈 파일.
+# ⚠️ /static/uploads/ (홍채 사진) 은 여기에 넣지 않는다.
+_AUTH_OPEN_EXACT = {"/healthz", "/privacy"}
+_AUTH_OPEN_PREFIX = ("/static/css/", "/static/js/")
+
+
+@app.before_request
+def _require_login():
+    path = request.path or "/"
+    if path in _AUTH_OPEN_EXACT or path.startswith(_AUTH_OPEN_PREFIX):
+        return None
+    if not _AUTH_USER or not _AUTH_PASS:
+        return Response("접근 제한 설정(IRIS_BASIC_USER / IRIS_BASIC_PASS)이 없어 화면을 열 수 없습니다. "
+                        "서버 관리자에게 알려 주세요.", 503, mimetype="text/plain; charset=utf-8")
+    a = request.authorization
+    if a and a.type == "basic" \
+            and hmac.compare_digest((a.username or "").encode(), _AUTH_USER.encode()) \
+            and hmac.compare_digest((a.password or "").encode(), _AUTH_PASS.encode()):
+        return None
+    return Response("로그인이 필요합니다. 연구진에게 받은 아이디와 비밀번호를 입력하세요.", 401,
+                    {"WWW-Authenticate": 'Basic realm="iris", charset="UTF-8"'},
+                    mimetype="text/plain; charset=utf-8")
+
+
+@app.route("/healthz")
+def healthz():
+    return "ok"
+# ──────────────────────────────────────────────────────────────────────────
+
 app.config["SECRET_KEY"] = "iris-research-dev-key-2024"
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(BASE_DIR, 'iris_data.db')}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -70,6 +109,15 @@ with app.app_context():
     except Exception:
         db.session.rollback()
     seed_default_categories(app)
+
+DB_PATH = os.path.join(BASE_DIR, "iris_data.db")
+privacy.ensure_table(DB_PATH)
+
+
+@app.errorhandler(413)
+def _too_large(e):
+    return jsonify({"error": "파일이 너무 큽니다. 한 번에 올리는 전체 크기는 50MB 까지입니다.",
+                    "errors": ["파일이 너무 큽니다(한 번에 50MB 까지)."]}), 413
 
 TRAINING_LOGS = {}  # session_id -> list of log strings
 
@@ -100,7 +148,7 @@ def index():
 
 @app.route("/upload")
 def upload_page():
-    return render_template("upload.html")
+    return render_template("upload.html", terms=privacy.CONSENT_TERMS)
 
 
 @app.route("/gallery")
@@ -160,6 +208,28 @@ def subject_detail_page(subject_id_str):
     return render_template("subject_detail.html", subject=subject, subject_id=subject_id_str, images=images)
 
 
+@app.route("/privacy")
+def privacy_page():
+    return render_template("privacy.html", terms=privacy.CONSENT_TERMS, officer=privacy.officer(),
+                           service_name=privacy.SERVICE_NAME, version=privacy.TERMS_VERSION)
+
+
+@app.route("/api/privacy/consent-terms", methods=["GET"])
+def api_consent_terms():
+    return jsonify(privacy.CONSENT_TERMS)
+
+
+@app.route("/api/privacy/consents", methods=["GET"])
+def api_consent_records():
+    """동의 기록 보기 (로그인 필요 — 위의 Basic 인증이 막는다)."""
+    return jsonify(privacy.list_records(DB_PATH, request.args.get("subject_id") or None))
+
+
+def _client_ip():
+    return request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", "").split(",")[0].strip() \
+        or request.remote_addr
+
+
 # ─── API: Subjects ────────────────────────────────────────────────────────────
 
 @app.route("/api/subjects", methods=["GET"])
@@ -199,7 +269,17 @@ def api_subject_detail(subject_id_str):
 
 @app.route("/api/subjects/<subject_id_str>", methods=["PUT"])
 def api_subject_save(subject_id_str):
-    data = request.get_json()
+    data = request.get_json() or {}
+    # 이름·성별·출생연도·진단은 개인정보·건강정보다. 이 피검자의 동의 기록이 없으면 받지 않는다.
+    personal = any(data.get(k) not in (None, "") for k in ("name", "birth_year", "gender", "diagnosis"))
+    if personal and not privacy.has_consent(DB_PATH, subject_id_str):
+        err = privacy.check(lambda k: data.get(k))
+        if err:
+            return jsonify({"error": "이 피검자는 아직 동의 기록이 없습니다. 이름·성별·출생연도·진단을 저장하려면 "
+                            "개인정보 수집·이용(필수)과 민감정보 처리(필수)에 모두 동의를 받아야 합니다.",
+                            "need_consent": True}), 400
+        privacy.record(DB_PATH, "subject_info", subject_id_str, [], _client_ip(),
+                       request.headers.get("User-Agent"), data.get("terms_version"))
     sub  = Subject.query.filter_by(subject_id=subject_id_str).first()
     if not sub:
         sub = Subject(subject_id=subject_id_str)
@@ -247,6 +327,9 @@ def api_upload():
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "파일이 없습니다"}), 400
+    consent_err = privacy.check(request.form.get)
+    if consent_err:
+        return jsonify({"error": consent_err, "errors": [consent_err], "need_consent": True}), 400
 
     eye_side = request.form.get("eye_side", "unknown")
     subject_id = request.form.get("subject_id", "")
@@ -277,6 +360,9 @@ def api_upload():
         saved.append(img.to_dict())
 
     db.session.commit()
+    if saved:
+        privacy.record(DB_PATH, "iris_upload", subject_id, [i["id"] for i in saved], _client_ip(),
+                       request.headers.get("User-Agent"), request.form.get("terms_version"))
     return jsonify({"saved": saved, "errors": errors})
 
 
@@ -1004,4 +1090,6 @@ def comparison_file(filename):
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5050))
-    app.run(debug=True, host="0.0.0.0", port=port)
+    # ⚠️ debug=True 면 Werkzeug 디버거(/console)가 인터넷에 열린다 — 코드 실행 위험.
+    #    2026-09-14 실제로 POST /console 시도가 기록돼 있었다. 필요할 때만 FLASK_DEBUG=1.
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1", host="0.0.0.0", port=port)
